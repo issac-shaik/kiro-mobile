@@ -15,6 +15,7 @@ jobs:
         with:
           node-version: '22'
       - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
       - run: npm test
       - run: bash gradlew :app:assembleDebug :app:lintDebug
       - uses: actions/upload-artifact@v4

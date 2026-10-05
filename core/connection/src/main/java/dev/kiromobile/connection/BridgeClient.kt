@@ -15,6 +15,7 @@ class BridgeClient(private val pairing: Pairing): SessionConnection {
     @Volatile private var polling: HttpURLConnection? = null
     private fun request(path: String, body: JSONObject?=null): JSONObject {
         val connection=URL(pairing.endpoint+path).openConnection() as HttpURLConnection
+        PcTls.configure(connection,pairing.certSha256)
         connection.connectTimeout=10000;connection.readTimeout=30000
         connection.instanceFollowRedirects=false
         connection.setRequestProperty("Authorization","Bearer ${pairing.token}")

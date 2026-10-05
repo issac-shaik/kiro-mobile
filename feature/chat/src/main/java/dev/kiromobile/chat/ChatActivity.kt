@@ -23,6 +23,8 @@ import android.view.WindowManager
 import android.widget.*
 import dev.kiromobile.connection.PairingStore
 import dev.kiromobile.connection.SessionHub
+import dev.kiromobile.connection.QrPairing
+import com.google.zxing.integration.android.IntentIntegrator
 import dev.kiromobile.notifications.ConnectionService
 import dev.kiromobile.notifications.PushSetup
 import dev.kiromobile.protocol.*
@@ -32,6 +34,9 @@ import dev.kiromobile.design.ToolbarIcon
 import dev.kiromobile.design.R as DesignR
 import org.json.JSONArray
 import java.util.Locale
+import io.noties.markwon.Markwon
+import io.noties.markwon.AbstractMarkwonPlugin
+import io.noties.markwon.core.MarkwonTheme
 
 // Platform widgets keep the APK small. The screen depends on the connection interface,
 // not on ACP framing, PC process management, or a particular push provider.
@@ -42,6 +47,13 @@ open class ChatActivity : Activity() {
     private val ink=KiroTheme.foreground
     private val muted=KiroTheme.secondary
     private val green=KiroTheme.success
+    private val markdown by lazy {
+        Markwon.builder(this).usePlugin(object : AbstractMarkwonPlugin() {
+            override fun configureTheme(builder: MarkwonTheme.Builder) {
+                builder.linkColor(purple).codeTextColor(ink).codeBackgroundColor(KiroTheme.chrome).blockMargin(dp(18))
+            }
+        }).build()
+    }
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
     private lateinit var credits: TextView
@@ -128,22 +140,45 @@ open class ChatActivity : Activity() {
         content.addView(text("Your Kiro workspace, wherever you are.",16f,muted));gap(content,32)
         val form=column().apply { background=box(panel,12,KiroTheme.border);setPadding(dp(20),dp(20),dp(20),dp(20)) }
         form.addView(text("Connect to your PC",18f,ink,true));gap(form,10)
-        form.addView(text("Start the companion on your PC, then enter your private connection details.",13f,muted));gap(form,24)
-        form.addView(text("Companion address",12f,muted));gap(form,8)
+        form.addView(text("Connect Tailscale on your phone, then scan your PC's QR code. Your connection is encrypted directly to your PC.",13f,muted));gap(form,24)
+        form.addView(button("Scan PC QR code",true) { scanPc() },LinearLayout.LayoutParams(-1,dp(48)));gap(form,12)
+        val manual=column().apply { visibility=View.GONE }
+        form.addView(button("Enter details manually") { manual.visibility=if(manual.visibility==View.GONE)View.VISIBLE else View.GONE });gap(form,12)
+        form.addView(manual)
+        manual.addView(text("Companion address",12f,muted));gap(manual,8)
         val endpoint=field("https://your-pc.tailnet.ts.net").apply { inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI;setSingleLine() }
-        form.addView(endpoint);gap(form,18)
-        form.addView(text("Pairing key",12f,muted));gap(form,8)
+        manual.addView(endpoint);gap(manual,18)
+        manual.addView(text("Pairing key",12f,muted));gap(manual,8)
         val key=field("Pairing key from your PC").apply { inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD;setSingleLine() }
-        form.addView(key);gap(form,24)
-        form.addView(button("Connect to Kiro",true) {
+        manual.addView(key);gap(manual,24)
+        manual.addView(button("Connect to Kiro",true) {
             try { PairingStore(this).save(endpoint.text.toString(),key.text.toString());chat() } catch(e: Exception) { toast(e.message ?: "Check the pairing details") }
         },LinearLayout.LayoutParams(-1,dp(48)))
         content.addView(form);gap(content,20)
         content.addView(text("Private connection. Your Kiro account stays on your PC.",12f,muted));gap(content,12)
         content.addView(button("Connection guide") {
-            AlertDialog.Builder(this).setTitle("Connect your workspace").setMessage("1. Sign in with kiro-cli login on your PC.\n2. Start the companion with npm run bridge.\n3. Connect Tailscale on your PC and phone.\n4. Run tailscale serve --bg http://127.0.0.1:8787.\n5. Enter its HTTPS address and the token from bridge/.local/pairing.json.").setPositiveButton("Got it",null).show()
+            AlertDialog.Builder(this).setTitle("Connect your workspace").setMessage("1. Connect Tailscale on your PC and phone to the same tailnet.\n2. Sign in with kiro-cli login and run npm run pair on your PC.\n3. Open http://127.0.0.1:8787/pair on the PC.\n4. Tap Scan PC QR code here.\n\nThe QR code works once and expires after 5 minutes. No copied keys or addresses. HTTPS is pinned to your PC certificate and carried over Tailscale. Works on Wi-Fi or mobile data while the PC and Tailscale are connected.\n\nFor local Wi-Fi only, use npm run pair:wifi.").setPositiveButton("Got it",null).show()
         });gap(content,24)
         content.addView(text("Independent mobile companion",11f,KiroTheme.muted))
+    }
+    private fun scanPc() {
+        IntentIntegrator(this).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE).setPrompt("Scan the QR code shown on your PC").setBeepEnabled(false).setOrientationLocked(false).initiateScan()
+    }
+    private fun pairQr(contents: String) {
+        val progress=AlertDialog.Builder(this).setTitle("Connecting to your PC").setMessage("Verifying the connection…").setCancelable(false).show()
+        Thread {
+            try {
+                val pairing=QrPairing.redeem(contents)
+                // Verify the authenticated connection before replacing an existing pairing.
+                dev.kiromobile.connection.BridgeClient(pairing).snapshot()
+                runOnUiThread {
+                    progress.dismiss()
+                    if(isFinishing||isDestroyed)return@runOnUiThread
+                    stopService(Intent(this,ConnectionService::class.java));SessionHub.disconnect()
+                    PairingStore(this).save(pairing.endpoint,pairing.token,pairing.certSha256);attachments.clear();chat()
+                }
+            } catch(e: Exception) { runOnUiThread { progress.dismiss();if(!isFinishing&&!isDestroyed)AlertDialog.Builder(this).setTitle("Could not connect").setMessage(e.message ?: "Refresh the QR code on your PC and try again.").setPositiveButton("OK",null).show() } }
+        }.start()
     }
     private fun chat() {
         screenPaired=true;lastRender="";renderedIds=emptyList();messageViews.clear();page()
@@ -241,7 +276,7 @@ open class ChatActivity : Activity() {
                 welcome.addView(button("Start a new chat") { createSession() })
                 transcript.addView(welcome)
             } else messages.forEach { m ->
-                messageViews[m.id]?.let { view -> if(view.text.toString()!=m.text)view.text=m.text;return@forEach }
+                messageViews[m.id]?.let { view -> if(view.tag!=m.text){markdown.setMarkdown(view,m.text);view.tag=m.text};return@forEach }
                 val user=m.role=="user"
                 val card=column().apply {
                     if(user)background=box(panel,8)
@@ -251,7 +286,7 @@ open class ChatActivity : Activity() {
                     val author=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
                     author.addView(mark(20));author.addView(text("Kiro",13f,ink,true),LinearLayout.LayoutParams(-2,-2).apply { marginStart=dp(8) });card.addView(author);gap(card,12)
                 }
-                val body=text(m.text,15f).apply { setTextIsSelectable(true);setLineSpacing(dp(4).toFloat(),1f) };messageViews[m.id]=body
+                val body=text("",15f).apply { setTextIsSelectable(true);setLineSpacing(dp(4).toFloat(),1f);markdown.setMarkdown(this,m.text);tag=m.text };messageViews[m.id]=body
                 card.addView(body)
                 transcript.addView(card,LinearLayout.LayoutParams(-1,-2).apply { if(user)marginStart=dp(24) });gap(transcript,18)
             }
@@ -329,6 +364,8 @@ open class ChatActivity : Activity() {
     @Deprecated("Platform activity result API keeps this module dependency-light")
     override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
+        val scanned=IntentIntegrator.parseActivityResult(requestCode,resultCode,data)
+        if(scanned!=null) { scanned.contents?.let { pairQr(it) };return }
         if(requestCode!=70||resultCode!=RESULT_OK)return
         val uri=data?.data ?: return
         Thread {
@@ -351,6 +388,7 @@ open class ChatActivity : Activity() {
         val pairing=PairingStore(this).read()
         val firebase=if(PushSetup.configured&&state?.pushConfigured==true)"Firebase push configured" else "Firebase push is not configured. Permission notifications use the active private connection. Android may suspend delivery when the app is force-stopped or the phone sleeps."
         AlertDialog.Builder(this).setTitle("Connection & notifications").setMessage("${pairing?.endpoint}\n\n$firebase\n\nKiro authentication stays on your PC. This companion supports one controlling phone session at a time.\n\nIndependent mobile companion · Kiro Dark UI")
+            .setNeutralButton("Scan PC QR code") { _,_ -> scanPc() }
             .setNeutralButton("Notification settings") { _,_ -> startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName)) }
             .setNegativeButton("Close",null).setPositiveButton("Disconnect") { _,_ ->
                 stopService(Intent(this,ConnectionService::class.java));SessionHub.disconnect();PairingStore(this).clear();attachments.clear();setup()

@@ -1,5 +1,21 @@
 {
-  "name": "kiro-mobile", "private": true, "type": "module", "version": "0.1.0",
-  "scripts": {"bridge": "node bridge/src/server.mjs", "demo": "node bridge/src/server.mjs --demo", "test": "node --test bridge/test/*.test.mjs", "probe": "node scripts/probe-kiro.mjs"},
-  "engines": {"node": ">=22"}
+  "name": "kiro-mobile",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "bridge": "node bridge/src/server.mjs",
+    "pair": "node bridge/src/server.mjs --tailscale",
+    "pair:wifi": "node bridge/src/server.mjs --wifi",
+    "demo": "node bridge/src/server.mjs --demo",
+    "test": "node --test bridge/test/*.test.mjs",
+    "probe": "node scripts/probe-kiro.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "selfsigned": "^5.5.0"
+  }
 }

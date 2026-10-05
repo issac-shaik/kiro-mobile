@@ -1,6 +1,9 @@
 # Companion API v1
 
-All endpoints require `Authorization: Bearer <pairing key>`. Use private HTTPS. Browser origins and redirects are not supported. Errors return `{ "error": "human-readable reason" }` with a non-2xx status. This is a single-owner API, not a hosted multi-tenant account service.
+Session, command and push endpoints require `Authorization: Bearer <pairing key>`. QR pairing uses certificate-pinned HTTPS on the PC's private Tailscale address. Browser origins and redirects are not supported. Errors return `{ "error": "human-readable reason" }` with a non-2xx status. This is a single-owner API, not a hosted multi-tenant account service.
+
+- `GET /pair` serves the QR page only on PC loopback, with a local Host header and no proxy/browser-origin headers. Its versioned invitation includes `kind:kiro-mobile-pair`, `version:1`, `network`, `endpoints`, `certSha256`, `code` and `expiresAt`; it never contains the durable key.
+- `POST /v1/pair` is available only on the private HTTPS listener. It accepts `{ "code": "one-time invitation" }` without a bearer key and returns `{ "token": "pairing key" }`. Invitations expire after five minutes and can be redeemed once. Clients must validate the QR's mandatory PC certificate fingerprint before sending the code and pin that certificate for later requests.
 
 - `GET /v1/state?after=<revision>` returns the normalized session snapshot. If unchanged, holds the response for up to 20 seconds. `revision` is scoped to the companion process; reconnect from revision zero after restarting. Clients retain their draft locally and never replay prompts automatically.
 - `POST /v1/command` accepts a UUID `requestId`, `type`, and type-specific fields. Successful commands return `{ "ok": true }`. `prompt` acknowledges accepted work; later completion/failure arrives in the state stream. Retrying an identical command with the same ID is deduplicated for the last 500 commands; reusing an ID with different data is rejected. This cache is not durable across companion restarts.

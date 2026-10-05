@@ -1,4 +1,5 @@
 .gradle/
+.kotlin/
 **/build/
 local.properties
 bridge/.local/
@@ -7,5 +8,7 @@ bridge/config.local.json
 **/*service-account*.json
 *.jks
 *.keystore
-dist/
+dist/*
+!dist/kiro-mobile-debug.apk
+!dist/SHA256SUMS.txt
 node_modules/

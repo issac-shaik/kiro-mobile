@@ -13,7 +13,14 @@ import android.view.inspector.WindowInspector
 import android.widget.EditText
 import android.widget.ListView
 import android.widget.TextView
+import android.text.Spanned
+import android.text.TextPaint
+import android.text.style.MetricAffectingSpan
 import dev.kiromobile.connection.PairingStore
+import dev.kiromobile.connection.QrPairing
+import dev.kiromobile.connection.BridgeClient
+import org.json.JSONObject
+import androidx.test.uiautomator.UiDevice
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
@@ -47,6 +54,13 @@ class MobileFlowTest {
         activity=instrumentation.startActivitySync(Intent(context,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         waitUntil { text("Connect to Kiro")!=null }
         capture("setup")
+        val scannerMonitor=instrumentation.addMonitor("com.journeyapps.barcodescanner.CaptureActivity",null,false)
+        click("Scan PC QR code")
+        assertNotNull("QR scanner did not open",instrumentation.waitForMonitorWithTimeout(scannerMonitor,10000))
+        instrumentation.removeMonitor(scannerMonitor)
+        UiDevice.getInstance(instrumentation).pressBack()
+        waitUntil { text("Scan PC QR code")!=null }
+        click("Enter details manually")
         onMain {
             val fields=views(activity.window.decorView).filterIsInstance<EditText>()
             fields[0].setText("http://10.0.2.2:8877");fields[1].setText("d".repeat(43))
@@ -59,12 +73,23 @@ class MobileFlowTest {
         click("Sessions");waitUntil { windows().filterIsInstance<ListView>().isNotEmpty() };item(0)
         click("Continue on phone")
         waitUntil { text("Explore your mobile workspace")!=null }
+        onMain {
+            val body=windows().filterIsInstance<TextView>().first { it.text.contains("Bold answer") }
+            val rendered=body.text as Spanned
+            assertFalse(rendered.toString().contains("**"))
+            assertFalse(rendered.toString().contains("##"))
+            assertTrue(rendered.toString().contains("2 * 3"))
+            val start=rendered.toString().indexOf("Bold answer")
+            assertTrue("Markdown emphasis must draw in bold",rendered.getSpans(start,start+"Bold answer".length,MetricAffectingSpan::class.java).any { span ->
+                val paint=TextPaint(body.paint);span.updateDrawState(paint);paint.isFakeBoldText || paint.typeface?.isBold==true
+            })
+        }
         onMain { assertNotNull(text("Default ▾"));assertNotNull(text("Low ▾")) }
         capture("chat")
         click("Demo · Balanced ▾");item(1);waitUntil { text("Demo · Fast ▾")!=null }
         click("Low ▾");item(1);waitUntil { text("High ▾")!=null }
         click("Default ▾");waitUntil { text("Agent")!=null };capture("agents");item(4);waitUntil { text("Plan ▾")!=null }
-        onMain { views(activity.window.decorView).filterIsInstance<EditText>().first().setText("Continue from my phone") }
+        onMain { views(activity.window.decorView).filterIsInstance<EditText>().first().setText("Continue **from my phone** with `2 * 3`") }
         click("Send")
         onMain { activity.moveTaskToBack(true) }
         val manager=context.getSystemService(NotificationManager::class.java)
@@ -72,9 +97,29 @@ class MobileFlowTest {
         waitUntil { manager.activeNotifications.any { it.id==1 } }
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         waitUntil { text("Review request")!=null }
+        onMain {
+            val body=windows().filterIsInstance<TextView>().firstOrNull { it.text.contains("Continue from my phone with") && it.text.contains("2 * 3") }
+            assertNotNull("Sent messages must render emphasis and preserve code",body)
+            assertFalse(body!!.text.toString().contains("**"))
+        }
         capture("permission")
-        click("Review request");click("Choose response");item(1)
+        click("Review request");waitUntil { text("Choose response")!=null };click("Choose response");item(1)
         waitUntil { manager.activeNotifications.none { it.tag?.startsWith("permission:")==true } }
         waitUntil { text("Review request")==null }
+    }
+    @Test fun qrPairingVerifiesPcIdentityAndRejectsReplays() {
+        val payload=InstrumentationRegistry.getArguments().getString("qrPairing")
+        org.junit.Assume.assumeNotNull(payload)
+        val invalid=JSONObject(payload!!).put("certSha256","0".repeat(64)).toString()
+        val unpinned=JSONObject(payload).put("certSha256",JSONObject.NULL).toString()
+        try { QrPairing.redeem(unpinned);fail("Unpinned relay pairing was accepted") } catch(_: IllegalArgumentException) {}
+        try { QrPairing.redeem(invalid);fail("Wrong PC certificate was accepted") } catch(_: IllegalStateException) {}
+        val pairing=QrPairing.redeem(payload)
+        assertEquals("d".repeat(43),pairing.token)
+        assertNotNull(pairing.certSha256)
+        assertEquals("online",BridgeClient(pairing).snapshot().status)
+        PairingStore(context).save(pairing.endpoint,pairing.token,pairing.certSha256)
+        assertEquals(pairing,PairingStore(context).read())
+        try { QrPairing.redeem(payload);fail("Used invitation was accepted") } catch(_: IllegalArgumentException) {}
     }
 }

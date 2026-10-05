@@ -9,7 +9,7 @@ out = root / "dist"
 out.mkdir(exist_ok=True)
 apk = out / "kiro-mobile-debug.apk"
 shutil.copyfile(root / "app/build/outputs/apk/debug/app-debug.apk", apk)
-excluded = {".git", ".gradle", ".local", "build", "dist", "node_modules"}
+excluded = {".git", ".gradle", ".kotlin", ".local", "build", "dist", "node_modules"}
 sources = []
 for item in root.rglob("*"):
     relative = item.relative_to(root)
