@@ -1,0 +1,11 @@
+.gradle/
+**/build/
+local.properties
+bridge/.local/
+bridge/config.local.json
+**/google-services.json
+**/*service-account*.json
+*.jks
+*.keystore
+dist/
+node_modules/
