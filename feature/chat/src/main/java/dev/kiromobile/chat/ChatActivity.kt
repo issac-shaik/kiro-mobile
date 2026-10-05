@@ -1,0 +1,360 @@
+package dev.kiromobile.chat
+
+import android.Manifest
+import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.content.res.ColorStateList
+import android.text.TextUtils
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.OpenableColumns
+import android.text.InputType
+import android.util.Base64
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.*
+import dev.kiromobile.connection.PairingStore
+import dev.kiromobile.connection.SessionHub
+import dev.kiromobile.notifications.ConnectionService
+import dev.kiromobile.notifications.PushSetup
+import dev.kiromobile.protocol.*
+import dev.kiromobile.design.KiroTheme
+import dev.kiromobile.design.Glyph
+import dev.kiromobile.design.ToolbarIcon
+import dev.kiromobile.design.R as DesignR
+import org.json.JSONArray
+import java.util.Locale
+
+// Platform widgets keep the APK small. The screen depends on the connection interface,
+// not on ACP framing, PC process management, or a particular push provider.
+open class ChatActivity : Activity() {
+    private val bg=KiroTheme.background
+    private val panel=KiroTheme.surface
+    private val purple=KiroTheme.accent
+    private val ink=KiroTheme.foreground
+    private val muted=KiroTheme.secondary
+    private val green=KiroTheme.success
+    private lateinit var root: LinearLayout
+    private lateinit var status: TextView
+    private lateinit var credits: TextView
+    private lateinit var subtitle: TextView
+    private lateinit var transcript: LinearLayout
+    private lateinit var transcriptScroll: ScrollView
+    private lateinit var permissionBox: LinearLayout
+    private lateinit var message: EditText
+    private lateinit var attachmentLabel: TextView
+    private lateinit var agent: Button
+    private lateinit var model: Button
+    private lateinit var reasoning: Button
+    private lateinit var send: ImageButton
+    private lateinit var attach: ImageButton
+    private lateinit var stop: ImageButton
+    private lateinit var banner: TextView
+    private var state: Snapshot?=null
+    private var screenPaired=false
+    private var lastRender=""
+    private var renderedIds=emptyList<String>()
+    private val messageViews=mutableMapOf<String,TextView>()
+    private val attachments=mutableListOf<Attachment>()
+    private val observer: (Snapshot?,String?)->Unit={snapshot,error-> if(screenPaired)render(snapshot,error) }
+    private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
+    private fun box(color: Int=panel, radius: Int=8, border: Int?=null)=GradientDrawable().apply { setColor(color);cornerRadius=dp(radius).toFloat();border?.let { setStroke(dp(1),it) } }
+    private fun column()=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+    private fun text(value: String,size: Float=14f,color: Int=ink,bold: Boolean=false)=TextView(this).apply {
+        this.text=value;textSize=size;setTextColor(color);includeFontPadding=false;if(bold)typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)
+        setLineSpacing(dp(3).toFloat(),1f)
+    }
+    private fun button(value: String, primary: Boolean=false, action: ()->Unit)=Button(this).apply {
+        text=value;isAllCaps=false;textSize=13f;setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled),intArrayOf()),intArrayOf(KiroTheme.muted,ink)))
+        background=RippleDrawable(ColorStateList.valueOf(0x228e47ff),box(if(primary)KiroTheme.primary else panel,8,if(primary)null else KiroTheme.border),null)
+        stateListAnimator=null;minHeight=dp(48);minimumHeight=dp(48);minimumWidth=0;minWidth=0;includeFontPadding=false
+        setPadding(dp(12),dp(8),dp(12),dp(8));setOnClickListener { action() }
+    }
+    private fun iconButton(label: String,glyph: Glyph,primary: Boolean=false,action: ()->Unit)=ImageButton(this).apply {
+        contentDescription=label;tooltipText=label;setImageDrawable(ToolbarIcon(glyph,ink));imageTintList=ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled),intArrayOf()),intArrayOf(KiroTheme.muted,ink))
+        background=RippleDrawable(ColorStateList.valueOf(0x338e47ff),box(if(primary)KiroTheme.primary else Color.TRANSPARENT,8),null)
+        setPadding(dp(13),dp(13),dp(13),dp(13));setOnClickListener { action() };layoutParams=LinearLayout.LayoutParams(dp(48),dp(48))
+    }
+    private fun mark(size: Int)=ImageView(this).apply { setImageResource(DesignR.drawable.kiro_mark);imageTintList=ColorStateList.valueOf(purple);layoutParams=LinearLayout.LayoutParams(dp(size),dp(size));importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+    private fun wordmark()=ImageView(this).apply { setImageResource(DesignR.drawable.kiro_wordmark);contentDescription="Kiro";scaleType=ImageView.ScaleType.FIT_START;layoutParams=LinearLayout.LayoutParams(dp(64),dp(24)) }
+    private fun line(parent: LinearLayout) { parent.addView(View(this).apply { setBackgroundColor(KiroTheme.border) },LinearLayout.LayoutParams(-1,dp(1))) }
+    private fun chip(value: String, action: ()->Unit)=button(value,action=action).apply {
+        background=RippleDrawable(ColorStateList.valueOf(0x338e47ff),box(Color.TRANSPARENT,6),null);gravity=Gravity.START or Gravity.CENTER_VERTICAL
+        setSingleLine();ellipsize=TextUtils.TruncateAt.END;setPadding(dp(8),0,dp(8),0)
+    }
+    private fun gap(parent: LinearLayout,size: Int=12) { parent.addView(View(this),LinearLayout.LayoutParams(1,dp(size))) }
+    private fun row(vararg children: View)=LinearLayout(this).apply {
+        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+        children.forEachIndexed { index,view -> addView(view,LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f).apply { if(index>0)marginStart=dp(8) }) }
+    }
+    private fun field(hintValue: String)=EditText(this).apply {
+        hint=hintValue;setTextColor(ink);setHintTextColor(KiroTheme.muted);textSize=15f;background=box(border=KiroTheme.border);setPadding(dp(14),dp(14),dp(14),dp(14))
+    }
+    private fun page() {
+        root=column().apply { setBackgroundColor(bg) }
+        setContentView(root)
+        root.setOnApplyWindowInsetsListener { view,insets ->
+            view.setPadding(0,insets.systemWindowInsetTop,0,insets.systemWindowInsetBottom);insets
+        }
+    }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Release builds protect private transcripts. Debug builds allow visual QA.
+        if(applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE==0)window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        savedInstanceState?.getString("draft")?.let { draft=it }
+        if(PairingStore(this).read()==null)setup() else chat()
+    }
+    private var draft=""
+    override fun onSaveInstanceState(outState: Bundle) { if(screenPaired)outState.putString("draft",message.text.toString());super.onSaveInstanceState(outState) }
+    override fun onStart() { super.onStart();SessionHub.observe(observer) }
+    override fun onStop() { SessionHub.remove(observer);super.onStop() }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent);setIntent(intent);if(screenPaired)render(SessionHub.snapshot,SessionHub.error) }
+    private fun setup() {
+        screenPaired=false;page()
+        val scroll=ScrollView(this).apply { isFillViewport=true }
+        val content=column().apply { setPadding(dp(28),dp(24),dp(28),dp(28)) }
+        scroll.addView(content);root.addView(scroll)
+        content.addView(wordmark());gap(content,48)
+        content.addView(mark(64));gap(content,24)
+        content.addView(text("Let's build.",32f,ink,true));gap(content,12)
+        content.addView(text("Your Kiro workspace, wherever you are.",16f,muted));gap(content,32)
+        val form=column().apply { background=box(panel,12,KiroTheme.border);setPadding(dp(20),dp(20),dp(20),dp(20)) }
+        form.addView(text("Connect to your PC",18f,ink,true));gap(form,10)
+        form.addView(text("Start the companion on your PC, then enter your private connection details.",13f,muted));gap(form,24)
+        form.addView(text("Companion address",12f,muted));gap(form,8)
+        val endpoint=field("https://your-pc.tailnet.ts.net").apply { inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI;setSingleLine() }
+        form.addView(endpoint);gap(form,18)
+        form.addView(text("Pairing key",12f,muted));gap(form,8)
+        val key=field("Pairing key from your PC").apply { inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD;setSingleLine() }
+        form.addView(key);gap(form,24)
+        form.addView(button("Connect to Kiro",true) {
+            try { PairingStore(this).save(endpoint.text.toString(),key.text.toString());chat() } catch(e: Exception) { toast(e.message ?: "Check the pairing details") }
+        },LinearLayout.LayoutParams(-1,dp(48)))
+        content.addView(form);gap(content,20)
+        content.addView(text("Private connection. Your Kiro account stays on your PC.",12f,muted));gap(content,12)
+        content.addView(button("Connection guide") {
+            AlertDialog.Builder(this).setTitle("Connect your workspace").setMessage("1. Sign in with kiro-cli login on your PC.\n2. Start the companion with npm run bridge.\n3. Connect Tailscale on your PC and phone.\n4. Run tailscale serve --bg http://127.0.0.1:8787.\n5. Enter its HTTPS address and the token from bridge/.local/pairing.json.").setPositiveButton("Got it",null).show()
+        });gap(content,24)
+        content.addView(text("Independent mobile companion",11f,KiroTheme.muted))
+    }
+    private fun chat() {
+        screenPaired=true;lastRender="";renderedIds=emptyList();messageViews.clear();page()
+        val header=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(16),dp(4),dp(4),dp(4));setBackgroundColor(KiroTheme.chrome) }
+        header.addView(wordmark());header.addView(View(this),LinearLayout.LayoutParams(0,1,1f))
+        header.addView(iconButton("Sessions",Glyph.HISTORY) { sessions() })
+        header.addView(iconButton("New chat",Glyph.PLUS) { createSession() })
+        val menu=iconButton("More options",Glyph.MORE) {}
+        menu.setOnClickListener {
+            PopupMenu(this,menu).apply {
+                getMenu().add("Refresh").setOnMenuItemClickListener { issue(command("refresh"));true }
+                getMenu().add("Settings").setOnMenuItemClickListener { settings();true }
+                show()
+            }
+        }
+        header.addView(menu);root.addView(header);line(root)
+        val workspace=column().apply { setPadding(dp(20),dp(14),dp(20),dp(12)) }
+        subtitle=text("Choose a session to continue",14f,ink,true).apply { setSingleLine();ellipsize=TextUtils.TruncateAt.MIDDLE }
+        workspace.addView(subtitle);gap(workspace,8)
+        status=text("○ Connecting",11f,muted)
+        credits=text("— credits",11f,muted).apply { gravity=Gravity.END or Gravity.CENTER_VERTICAL;minHeight=dp(32);contentDescription="Account credits" }
+        workspace.addView(row(status,credits));root.addView(workspace);line(root)
+        transcriptScroll=ScrollView(this).apply { isFillViewport=true;clipToPadding=false;setPadding(dp(20),dp(20),dp(20),dp(12)) }
+        transcript=column();transcriptScroll.addView(transcript)
+        root.addView(transcriptScroll,LinearLayout.LayoutParams(-1,0,1f))
+        val footer=column().apply { setPadding(dp(12),0,dp(12),dp(10)) };root.addView(footer)
+        permissionBox=column();footer.addView(permissionBox)
+        banner=text("",11f,muted).apply { setPadding(dp(6),dp(8),dp(6),dp(8));maxLines=2;ellipsize=TextUtils.TruncateAt.END };footer.addView(banner)
+        val composer=column().apply { background=box(panel,10,KiroTheme.border);setPadding(dp(6),dp(6),dp(6),dp(4)) }
+        attachmentLabel=text("",12f,purple).apply { visibility=View.GONE;setPadding(dp(8),dp(6),dp(8),dp(6));setOnClickListener { attachments.clear();refreshAttachments() } }
+        composer.addView(attachmentLabel)
+        message=field("Ask Kiro to build, fix, or explore…").apply {
+            background=null;minHeight=dp(76);maxLines=5;minLines=2;gravity=Gravity.TOP;setPadding(dp(10),dp(12),dp(10),dp(12))
+            inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;setText(draft)
+        }
+        message.setOnFocusChangeListener { _,focused -> composer.background=box(panel,10,if(focused)purple else KiroTheme.border) }
+        composer.addView(message)
+        agent=chip("Default ▾") { chooseAgent() }
+        reasoning=chip("Reasoning ▾") { choose("reasoning",state?.reasoning ?: emptyList()) }.apply { gravity=Gravity.END or Gravity.CENTER_VERTICAL }
+        composer.addView(row(agent,reasoning));line(composer)
+        val tools=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
+        model=chip("Model ▾") { choose("model",state?.models ?: emptyList()) }
+        tools.addView(model,LinearLayout.LayoutParams(0,dp(48),1f))
+        attach=iconButton("Attach media",Glyph.ATTACH) { attachMedia() };tools.addView(attach)
+        stop=iconButton("Stop",Glyph.STOP) { issue(command("cancel")) };tools.addView(stop)
+        send=iconButton("Send",Glyph.SEND,true) { sendMessage() };tools.addView(send)
+        composer.addView(tools);footer.addView(composer)
+        if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),90)
+        startForegroundService(Intent(this,ConnectionService::class.java));SessionHub.connect(this)
+        render(SessionHub.snapshot,SessionHub.error)
+    }
+    private fun render(s: Snapshot?,error: String?) {
+        state=s
+        status.text=when { error!=null -> "○ Reconnecting";s?.status=="online" -> if(s.demo) "● Demo connection" else "● PC connected";else -> "○ Connecting" }
+        status.setTextColor(if(s?.status=="online"&&error==null)green else muted)
+        credits.text=s?.credits?.let { String.format(Locale.US,"%,.2f credits",it) } ?: "Credits unavailable"
+        credits.setOnClickListener { AlertDialog.Builder(this).setTitle("Account credits").setMessage(s?.usageDescription ?: "Connect to load usage").setPositiveButton("OK",null).show() }
+        subtitle.text=s?.sessions?.find { it.id==s.selectedId }?.title ?: s?.selectedCwd?.substringAfterLast('\\')?.substringAfterLast('/') ?: "New session"
+        subtitle.contentDescription=s?.selectedCwd ?: "New session"
+        val presetLabels=mapOf("default" to "Default","spec" to "Spec","quick-spec" to "Quick spec","bug-fix" to "Bug fix","plan" to "Plan")
+        agent.text=(presetLabels[s?.preset] ?: "Default")+" ▾"
+        model.text=(s?.models?.find { it.id==s.currentModel }?.name ?: "Model")+" ▾"
+        reasoning.text=(s?.reasoning?.find { it.id==s.currentReasoning }?.name ?: "Reasoning")+" ▾"
+        val ready=s?.selectedId!=null && s.status=="online" && error==null
+        agent.isEnabled=ready&&s?.busy!=true;model.isEnabled=agent.isEnabled;reasoning.isEnabled=agent.isEnabled
+        attach.isEnabled=ready&&s?.imageSupported==true&&s.busy!=true
+        send.isEnabled=ready&&s?.busy!=true
+        send.visibility=if(s?.busy==true)View.GONE else View.VISIBLE
+        stop.visibility=if(s?.busy==true)View.VISIBLE else View.GONE
+        model.contentDescription="Model: ${model.text}";reasoning.contentDescription="Reasoning: ${reasoning.text}";agent.contentDescription="Agent: ${agent.text}"
+        banner.text=error ?: s?.error ?: s?.pushError ?: when {
+            s?.permissions?.isNotEmpty()==true -> "Permission needed · your agent is waiting"
+            s?.busy==true -> s.activity ?: "Kiro is working on your PC…"
+            s?.demo==true -> "Demo data · no account connected"
+            s==null||s.status!="online" -> "Connecting to your PC…"
+            s?.selectedId!=null && !s.presetNative && s.preset!="default" -> "${presetLabels[s.preset]} uses prompt guidance on this engine"
+            PushSetup.configured&&s?.pushConfigured==true -> "Push notifications enabled"
+            else -> ""
+        }
+        banner.visibility=if(banner.text.isNullOrBlank())View.GONE else View.VISIBLE
+        val signature=s?.messages?.joinToString("|") { it.id+it.text+it.streaming } ?: "empty"
+        if(signature!=lastRender) {
+            lastRender=signature
+            val nearBottom=transcriptScroll.getChildAt(0)?.let { it.height-transcriptScroll.height-transcriptScroll.scrollY<dp(100) } ?: true
+            val messages=s?.messages ?: emptyList()
+            val ids=messages.map { it.id }
+            val appendOnly=renderedIds.isNotEmpty()&&ids.take(renderedIds.size)==renderedIds
+            if(!appendOnly){transcript.removeAllViews();messageViews.clear();renderedIds=emptyList()}
+            if(s?.messages.isNullOrEmpty()) {
+                val welcome=column().apply { gravity=Gravity.CENTER;setPadding(dp(16),dp(40),dp(16),dp(30)) }
+                welcome.addView(mark(48));gap(welcome,20)
+                welcome.addView(text("Let's build",26f,ink,true));gap(welcome,12)
+                welcome.addView(text("What do you want to work on?",14f,muted).apply { gravity=Gravity.CENTER });gap(welcome,24)
+                welcome.addView(button("Choose a session") { sessions() });gap(welcome,10)
+                welcome.addView(button("Start a new chat") { createSession() })
+                transcript.addView(welcome)
+            } else messages.forEach { m ->
+                messageViews[m.id]?.let { view -> if(view.text.toString()!=m.text)view.text=m.text;return@forEach }
+                val user=m.role=="user"
+                val card=column().apply {
+                    if(user)background=box(panel,8)
+                    setPadding(if(user)dp(14) else 0,dp(12),if(user)dp(14) else 0,dp(14))
+                }
+                if(!user) {
+                    val author=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
+                    author.addView(mark(20));author.addView(text("Kiro",13f,ink,true),LinearLayout.LayoutParams(-2,-2).apply { marginStart=dp(8) });card.addView(author);gap(card,12)
+                }
+                val body=text(m.text,15f).apply { setTextIsSelectable(true);setLineSpacing(dp(4).toFloat(),1f) };messageViews[m.id]=body
+                card.addView(body)
+                transcript.addView(card,LinearLayout.LayoutParams(-1,-2).apply { if(user)marginStart=dp(24) });gap(transcript,18)
+            }
+            renderedIds=ids
+            if(nearBottom)transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
+        }
+        permissionBox.removeAllViews()
+        s?.permissions?.firstOrNull()?.let { p ->
+            val card=column().apply { background=box(panel,8,KiroTheme.warning);setPadding(dp(14),dp(12),dp(14),dp(12)) }
+            card.addView(text("Permission required",12f,KiroTheme.warning,true));gap(card,5)
+            card.addView(text(p.title,14f,ink,true));gap(card,8)
+            card.addView(button("Review request") { review(p) });permissionBox.addView(card)
+        }
+    }
+    private fun issue(c: org.json.JSONObject, done: (() -> Unit)?=null) {
+        SessionHub.send(c) { error -> if(error!=null){toast(error);render(SessionHub.snapshot,SessionHub.error)} else done?.invoke() }
+    }
+    private fun sessions() {
+        val list=state?.sessions ?: emptyList()
+        if(list.isEmpty()){toast("No sessions yet. Refresh or start a new chat.");return}
+        val search=field("Search sessions")
+        val view=ListView(this);val area=column();area.setPadding(dp(16),dp(8),dp(16),0);area.addView(search);area.addView(view,LinearLayout.LayoutParams(-1,dp(340)))
+        var filtered=list
+        fun update(query: String) { filtered=list.filter { (it.title+it.cwd).contains(query,true) };view.adapter=ArrayAdapter(this,android.R.layout.simple_list_item_1,filtered.map { it.title+"\n"+it.cwd }) }
+        update("")
+        search.addTextChangedListener(object: android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?,start: Int,count: Int,after: Int){}
+            override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int){update(s.toString())}
+            override fun afterTextChanged(s: android.text.Editable?){}
+        })
+        val dialog=AlertDialog.Builder(this).setTitle("Your sessions").setView(area).setNegativeButton("Close",null).create()
+        view.setOnItemClickListener { _,_,position,_ ->
+            val session=filtered[position];dialog.dismiss()
+            if(session.id==state?.selectedId)return@setOnItemClickListener
+            AlertDialog.Builder(this).setTitle("Continue this conversation?").setMessage("Finish or stop the active turn on your desktop first. This restores the saved conversation on the companion. Keep one client in control to avoid conflicting changes.").setNegativeButton("Cancel",null).setPositiveButton("Continue on phone") { _,_ -> issue(command("load","sessionId" to session.id,"handoffConfirmed" to true)) }.show()
+        };dialog.show()
+    }
+    private fun createSession() {
+        val cwd=field("Absolute workspace path on PC").apply { setText(state?.selectedCwd ?: "");setSingleLine() }
+        AlertDialog.Builder(this).setTitle("New conversation").setMessage("The folder must be allowed in your PC companion configuration.").setView(cwd).setNegativeButton("Cancel",null).setPositiveButton("Create") { _,_ -> issue(command("create","cwd" to cwd.text.toString())) }.show()
+    }
+    private fun choose(kind: String, choices: List<Choice>) {
+        if(choices.isEmpty()){toast("Kiro has not advertised ${if(kind=="model")"models" else "reasoning options"} for this session yet.");return}
+        val current=if(kind=="model")state?.currentModel else state?.currentReasoning
+        AlertDialog.Builder(this).setTitle(if(kind=="model")"Language model" else "Reasoning effort").setSingleChoiceItems(choices.map { it.name }.toTypedArray(),choices.indexOfFirst { it.id==current }) { dialog,index ->
+            issue(command("select","kind" to kind,"value" to choices[index].id));dialog.dismiss()
+        }.setNegativeButton("Cancel",null).show()
+    }
+    private fun chooseAgent() {
+        val choices=listOf(Choice("default","Default"),Choice("spec","Spec"),Choice("quick-spec","Quick spec"),Choice("bug-fix","Bug fix"),Choice("plan","Plan"))
+        AlertDialog.Builder(this).setTitle("Agent").setSingleChoiceItems(choices.map { it.name }.toTypedArray(),choices.indexOfFirst { it.id==state?.preset }) { dialog,index ->
+            issue(command("select","kind" to "agent","value" to choices[index].id));dialog.dismiss()
+        }.setNegativeButton("Cancel",null).show()
+    }
+    private fun review(p: Permission) {
+        val scroll=ScrollView(this);val details=text(p.title+"\n\n"+p.details,13f).apply { setPadding(dp(20),dp(12),dp(20),dp(12));setTextIsSelectable(true) };scroll.addView(details)
+        AlertDialog.Builder(this).setTitle("Review permission").setView(scroll).setNegativeButton("Close",null).setPositiveButton("Choose response") { _,_ ->
+            AlertDialog.Builder(this).setTitle("Permission response").setItems((p.options.map { it.name }+"Cancel request").toTypedArray()) { _,index ->
+                issue(command("permission","permissionId" to p.id,"optionId" to p.options.getOrNull(index)?.id))
+            }.setNegativeButton("Back",null).show()
+        }.show()
+    }
+    private fun sendMessage() {
+        val value=message.text.toString()
+        if(value.isBlank()&&attachments.isEmpty())return
+        send.isEnabled=false
+        val media=JSONArray().apply { attachments.forEach { put(it.json()) } }
+        issue(command("prompt","text" to value,"attachments" to media)) { message.setText("");attachments.clear();refreshAttachments() }
+    }
+    private fun attachMedia() {
+        if(attachments.size>=4){toast("Attach at most four images");return}
+        val intent=Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type="image/*";addCategory(Intent.CATEGORY_OPENABLE);putExtra(Intent.EXTRA_MIME_TYPES,arrayOf("image/jpeg","image/png","image/webp","image/gif")) }
+        startActivityForResult(intent,70)
+    }
+    @Deprecated("Platform activity result API keeps this module dependency-light")
+    override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode!=70||resultCode!=RESULT_OK)return
+        val uri=data?.data ?: return
+        Thread {
+            try {
+                val mime=contentResolver.getType(uri) ?: throw IllegalArgumentException("Cannot identify the image")
+                require(mime in listOf("image/jpeg","image/png","image/webp","image/gif")) { "Choose JPEG, PNG, WebP or GIF" }
+                val bytes=contentResolver.openInputStream(uri)?.use { input ->
+                    val output=java.io.ByteArrayOutputStream();val buffer=ByteArray(8192)
+                    while(output.size()<=8*1024*1024) { val count=input.read(buffer);if(count<0)break;output.write(buffer,0,count) };output.toByteArray()
+                } ?: throw IllegalArgumentException("Cannot read image")
+                require(bytes.isNotEmpty()&&bytes.size<=8*1024*1024) { "Each image must be under 8 MB" }
+                val name=fileName(uri)
+                runOnUiThread { if(attachments.size<4)attachments.add(Attachment(name,mime,Base64.encodeToString(bytes,Base64.NO_WRAP)));refreshAttachments() }
+            } catch(e: Exception) { runOnUiThread { toast(e.message ?: "Cannot attach image") } }
+        }.start()
+    }
+    private fun fileName(uri: Uri): String = contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { if(it.moveToFirst())it.getString(0) else "Image" } ?: "Image"
+    private fun refreshAttachments() { attachmentLabel.visibility=if(attachments.isEmpty())View.GONE else View.VISIBLE;attachmentLabel.text=if(attachments.isEmpty())"" else attachments.joinToString(" · ") { it.name }+"  × clear" }
+    private fun settings() {
+        val pairing=PairingStore(this).read()
+        val firebase=if(PushSetup.configured&&state?.pushConfigured==true)"Firebase push configured" else "Firebase push is not configured. Permission notifications use the active private connection. Android may suspend delivery when the app is force-stopped or the phone sleeps."
+        AlertDialog.Builder(this).setTitle("Connection & notifications").setMessage("${pairing?.endpoint}\n\n$firebase\n\nKiro authentication stays on your PC. This companion supports one controlling phone session at a time.\n\nIndependent mobile companion · Kiro Dark UI")
+            .setNeutralButton("Notification settings") { _,_ -> startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName)) }
+            .setNegativeButton("Close",null).setPositiveButton("Disconnect") { _,_ ->
+                stopService(Intent(this,ConnectionService::class.java));SessionHub.disconnect();PairingStore(this).clear();attachments.clear();setup()
+            }.show()
+    }
+    private fun toast(value: String) { Toast.makeText(this,value,Toast.LENGTH_LONG).show() }
+}

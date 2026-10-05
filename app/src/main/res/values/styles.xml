@@ -1,0 +1,23 @@
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#19161D</item>
+        <item name="android:navigationBarColor">#211D25</item>
+        <item name="android:colorAccent">#B080FF</item>
+        <item name="android:colorBackground">#211D25</item>
+        <item name="android:colorButtonNormal">#28242E</item>
+        <item name="android:textColorPrimary">#F2F1F4</item>
+        <item name="android:textColorSecondary">#C1BEC6</item>
+        <item name="android:alertDialogTheme">@style/KiroDialog</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#211D25</item>
+    </style>
+    <style name="KiroDialog" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">#B080FF</item>
+        <item name="android:colorBackground">#28242E</item>
+        <item name="android:textColorPrimary">#F2F1F4</item>
+        <item name="android:textColorSecondary">#C1BEC6</item>
+        <item name="android:windowBackground">@drawable/kiro_dialog</item>
+    </style>
+</resources>
