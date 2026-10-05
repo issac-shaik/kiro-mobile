@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 export class State extends EventEmitter {
-  constructor(){super();this.data={revision:1,status:'connecting',error:null,sessions:[],selectedSession:null,transcript:[],permissions:[],models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null,usage:null,push:{configured:false},imageSupported:false,busy:false,source:'local',connectionKind:'resume'};}
+  constructor(){super();this.data={revision:1,status:'connecting',error:null,sessions:[],selectedSession:null,transcript:[],permissions:[],models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null,usage:null,autopilot:null,autopilotSupported:false,contextUsagePercent:null,push:{configured:false},imageSupported:false,busy:false,source:'local',connectionKind:'resume'};}
   change(values={}){Object.assign(this.data,values);this.data.revision++;this.emit('change',this.data);}
   addText(role,text,{replay=false}={}) {
     if(!text)return;
@@ -12,6 +12,15 @@ export class State extends EventEmitter {
     if(messages.at(-1)?.text.length>200000)messages.at(-1).text=messages.at(-1).text.slice(-200000);
     let total=messages.reduce((sum,m)=>sum+m.text.length,0);
     while(total>1000000&&messages.length>1){total-=messages[0].text.length;messages.shift();}
+    this.change();
+  }
+  addTurnSummary(summary){
+    if(summary.creditsUsed==null&&summary.elapsedMs==null)return;
+    const id=summary.requestId?'turn:'+summary.requestId:crypto.randomUUID();
+    const existing=this.data.transcript.find(m=>m.id===id);
+    if(existing)Object.assign(existing,{summary});
+    else this.data.transcript.push({id,role:'summary',text:'',streaming:false,summary});
+    if(this.data.transcript.length>500)this.data.transcript.splice(0,this.data.transcript.length-500);
     this.change();
   }
   finish(){for(const m of this.data.transcript)m.streaming=false;this.change({busy:false});}

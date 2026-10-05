@@ -66,6 +66,9 @@ open class ChatActivity : Activity() {
     private lateinit var agent: Button
     private lateinit var model: Button
     private lateinit var reasoning: Button
+    private lateinit var autopilot: Switch
+    private lateinit var contextCircle: View
+    private var syncingAutopilot=false
     private lateinit var send: ImageButton
     private lateinit var attach: ImageButton
     private lateinit var stop: ImageButton
@@ -199,7 +202,7 @@ open class ChatActivity : Activity() {
         subtitle=text("Choose a session to continue",14f,ink,true).apply { setSingleLine();ellipsize=TextUtils.TruncateAt.MIDDLE }
         workspace.addView(subtitle);gap(workspace,8)
         status=text("○ Connecting",11f,muted)
-        credits=text("— credits",11f,muted).apply { gravity=Gravity.END or Gravity.CENTER_VERTICAL;minHeight=dp(32);contentDescription="Account credits" }
+        credits=text("— credits remaining",11f,muted).apply { gravity=Gravity.END or Gravity.CENTER_VERTICAL;minHeight=dp(32);contentDescription="Account credits remaining" }
         workspace.addView(row(status,credits));root.addView(workspace);line(root)
         transcriptScroll=ScrollView(this).apply { isFillViewport=true;clipToPadding=false;setPadding(dp(20),dp(20),dp(20),dp(12)) }
         transcript=column();transcriptScroll.addView(transcript)
@@ -218,9 +221,35 @@ open class ChatActivity : Activity() {
         composer.addView(message)
         agent=chip("Default ▾") { chooseAgent() }
         reasoning=chip("Reasoning ▾") { choose("reasoning",state?.reasoning ?: emptyList()) }.apply { gravity=Gravity.END or Gravity.CENTER_VERTICAL }
-        composer.addView(row(agent,reasoning));line(composer)
+        composer.addView(row(agent,reasoning))
+        autopilot=Switch(this).apply {
+            text="Autopilot";textSize=12f;setTextColor(ink);isChecked=true;minHeight=dp(48);setPadding(dp(8),0,dp(8),0)
+            thumbTintList=ColorStateList.valueOf(ink)
+            trackTintList=ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(purple,muted))
+            setOnCheckedChangeListener { _,enabled -> if(!syncingAutopilot){
+                syncingAutopilot=true;isChecked=state?.autopilot ?: true;syncingAutopilot=false
+                isEnabled=false;issue(command("select","kind" to "autopilot","value" to if(enabled)"on" else "off"))
+            } }
+        }
+        composer.addView(autopilot,LinearLayout.LayoutParams(-2,dp(48)));line(composer)
         val tools=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
         model=chip("Model ▾") { choose("model",state?.models ?: emptyList()) }
+        contextCircle=object : View(this) {
+            private val paint=android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style=android.graphics.Paint.Style.STROKE;strokeWidth=dp(2).toFloat();strokeCap=android.graphics.Paint.Cap.ROUND }
+            override fun onDraw(canvas: android.graphics.Canvas) {
+                super.onDraw(canvas)
+                val radius=dp(7).toFloat();val cx=width/2f;val cy=height/2f
+                paint.color=muted;canvas.drawCircle(cx,cy,radius,paint)
+                state?.contextUsagePercent?.let { percent ->
+                    paint.color=if(percent>=90)KiroTheme.warning else green
+                    canvas.drawArc(cx-radius,cy-radius,cx+radius,cy+radius,-90f,(percent.coerceIn(0.0,100.0)*3.6).toFloat(),false,paint)
+                }
+            }
+        }.apply { isFocusable=true;setOnClickListener {
+            val detail=state?.contextUsagePercent?.let { String.format(Locale.US,"%.1f%% of the context window used",it) } ?: "Kiro has not reported context usage for this session yet."
+            AlertDialog.Builder(this@ChatActivity).setTitle("Context window").setMessage(detail).setPositiveButton("OK",null).show()
+        } }
+        tools.addView(contextCircle,LinearLayout.LayoutParams(dp(40),dp(48)))
         tools.addView(model,LinearLayout.LayoutParams(0,dp(48),1f))
         attach=iconButton("Attach media",Glyph.ATTACH) { attachMedia() };tools.addView(attach)
         stop=iconButton("Stop",Glyph.STOP) { issue(command("cancel")) };tools.addView(stop)
@@ -234,7 +263,10 @@ open class ChatActivity : Activity() {
         state=s
         status.text=when { error!=null -> "○ Reconnecting";s?.status=="online" -> if(s.demo) "● Demo connection" else "● PC connected";else -> "○ Connecting" }
         status.setTextColor(if(s?.status=="online"&&error==null)green else muted)
-        credits.text=s?.credits?.let { String.format(Locale.US,"%,.2f credits",it) } ?: "Credits unavailable"
+        credits.text=s?.credits?.let { String.format(Locale.US,"%,.2f credits remaining",it) } ?: "Credits remaining unavailable"
+        contextCircle.contentDescription=s?.contextUsagePercent?.let { String.format(Locale.US,"Context window: %.1f%% used",it) } ?: "Context usage unavailable"
+        contextCircle.invalidate()
+        syncingAutopilot=true;autopilot.isChecked=s?.autopilot ?: true;syncingAutopilot=false
         credits.setOnClickListener { AlertDialog.Builder(this).setTitle("Account credits").setMessage(s?.usageDescription ?: "Connect to load usage").setPositiveButton("OK",null).show() }
         subtitle.text=s?.sessions?.find { it.id==s.selectedId }?.title ?: s?.selectedCwd?.substringAfterLast('\\')?.substringAfterLast('/') ?: "New session"
         subtitle.contentDescription=s?.selectedCwd ?: "New session"
@@ -244,8 +276,9 @@ open class ChatActivity : Activity() {
         reasoning.text=(s?.reasoning?.find { it.id==s.currentReasoning }?.name ?: "Reasoning")+" ▾"
         val ready=s?.selectedId!=null && s.status=="online" && error==null
         agent.isEnabled=ready&&s?.busy!=true;model.isEnabled=agent.isEnabled;reasoning.isEnabled=agent.isEnabled
+        autopilot.isEnabled=ready&&s?.busy!=true&&s?.permissions.isNullOrEmpty()&&s?.autopilotSupported==true&&s.autopilot!=null
         attach.isEnabled=ready&&s?.imageSupported==true&&s.busy!=true
-        send.isEnabled=ready&&s?.busy!=true
+        send.isEnabled=ready&&s?.busy!=true&&s?.autopilot!=null
         send.visibility=if(s?.busy==true)View.GONE else View.VISIBLE
         stop.visibility=if(s?.busy==true)View.VISIBLE else View.GONE
         model.contentDescription="Model: ${model.text}";reasoning.contentDescription="Reasoning: ${reasoning.text}";agent.contentDescription="Agent: ${agent.text}"
@@ -259,7 +292,7 @@ open class ChatActivity : Activity() {
             else -> ""
         }
         banner.visibility=if(banner.text.isNullOrBlank())View.GONE else View.VISIBLE
-        val signature=s?.messages?.joinToString("|") { it.id+it.text+it.streaming } ?: "empty"
+        val signature=s?.messages?.joinToString("|") { it.id+it.text+it.streaming+it.creditsUsed+it.elapsedMs } ?: "empty"
         if(signature!=lastRender) {
             lastRender=signature
             val nearBottom=transcriptScroll.getChildAt(0)?.let { it.height-transcriptScroll.height-transcriptScroll.scrollY<dp(100) } ?: true
@@ -276,6 +309,12 @@ open class ChatActivity : Activity() {
                 welcome.addView(button("Start a new chat") { createSession() })
                 transcript.addView(welcome)
             } else messages.forEach { m ->
+                if(m.role=="summary") {
+                    val value=listOfNotNull(m.creditsUsed?.let { String.format(Locale.US,"%.3f credits used",it) },m.elapsedMs?.let { String.format(Locale.US,"%.1fs elapsed",it/1000) }).joinToString(" · ")
+                    messageViews[m.id]?.let { it.text=value;return@forEach }
+                    val summary=text(value,11f,muted).apply { setPadding(0,0,0,dp(16));setTextIsSelectable(true) }
+                    messageViews[m.id]=summary;transcript.addView(summary);return@forEach
+                }
                 messageViews[m.id]?.let { view -> if(view.tag!=m.text){markdown.setMarkdown(view,m.text);view.tag=m.text};return@forEach }
                 val user=m.role=="user"
                 val card=column().apply {

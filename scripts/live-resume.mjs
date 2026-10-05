@@ -13,7 +13,7 @@ try {
   console.log('Saved session resume: PASS');
   console.log('Replayed transcript messages:',state.data.transcript.length);
   console.log('Replayed roles:',state.data.transcript.map(m=>m.role).join(', '));
-  console.log('Supervision confirmed:',adapter.supervised);
+  console.log('Autopilot confirmed:',state.data.autopilot===true);
   console.log('Model catalog after resume:',state.data.models.length);
   if(process.argv.includes('--stream')) {
     adapter.onPermission=p=>adapter.resolvePermission(p.id,null);

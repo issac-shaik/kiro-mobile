@@ -14,6 +14,7 @@ export const PRESETS={
 export class KiroAdapter {
   constructor(state,{roots=[process.cwd()],transport,onPermission=()=>{}}={}) {
     this.state=state;this.roots=roots.map(r=>path.resolve(r));this.transport=transport||new AcpTransport();this.onPermission=onPermission;this.extensions=[];this.preset='default';this.presetPending=false;this.supervised=false;
+    this.configurationConfirmed=false;this.autopilot=true;
     this.transport.on('message',m=>this.message(m));
     this.transport.on('unavailable',error=>{this.state.data.permissions=[];this.state.change({status:'offline',error,busy:false});});
   }
@@ -39,24 +40,28 @@ export class KiroAdapter {
     const values=id=>{const raw=options.find(o=>o.id===id)?.options||[];return raw.flatMap(o=>o.options||[o]).map(o=>({id:o.value,name:o.name||o.value}));};
     const mode=result.modes?.currentModeId||options.find(o=>o.id==='mode')?.currentValue||this.state.data.currentMode;
     const preset=Object.keys(PRESETS).find(key=>PRESETS[key].modes.includes(mode));
+    const autopilot=options.find(o=>o.id==='autopilot');
+    if(autopilot)this.state.change({autopilotSupported:true,autopilot:autopilot.currentValue==='on'?true:autopilot.currentValue==='off'?false:null});
     this.state.change({models:values('model'),reasoning:values('effortLevel'),modes:result.modes?.availableModes||this.state.data.modes,currentModel:options.find(o=>o.id==='model')?.currentValue||this.state.data.currentModel,currentReasoning:options.find(o=>o.id==='effortLevel')?.currentValue||null,currentMode:mode,...preset?{agentPreset:preset,agentPresetNative:true}:{}});
   }
   requireIdle(){if(this.state.data.busy||this.state.data.permissions.length)throw new Error('Wait for the current turn or cancel it first');}
-  async supervise(sessionId){const reply=await this.transport.rpc('session/set_config_option',{sessionId,configId:'autopilot',value:'off'});if(reply.configOptions?.find(o=>o.id==='autopilot')?.currentValue!=='off')throw new Error('Kiro did not confirm supervised mode. Update the CLI before sending prompts.');this.supervised=true;this.configure(reply);}
-  async create(cwd){this.requireIdle();cwd=await this.validateCwd(cwd);this.supervised=false;this.preset='default';this.presetPending=false;this.state.change({transcript:[],selectedSession:null,models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null});const result=await this.transport.rpc('session/new',{cwd,mcpServers:[]});this.adopt(result.sessionId,cwd,result);try{await this.supervise(result.sessionId);}catch(e){this.state.change({selectedSession:null});throw e;}await this.list();}
+  async setAutopilot(sessionId,enabled){const value=enabled?'on':'off';this.configurationConfirmed=false;this.state.change({autopilot:null});const reply=await this.transport.rpc('session/set_config_option',{sessionId,configId:'autopilot',value});if(reply.configOptions?.find(o=>o.id==='autopilot')?.currentValue!==value)throw new Error('Kiro did not confirm Autopilot configuration. Reopen the session or update the CLI.');this.configurationConfirmed=true;this.autopilot=enabled;this.supervised=!enabled;this.configure(reply);}
+  async supervise(sessionId){await this.setAutopilot(sessionId,false);}
+  async create(cwd){this.requireIdle();cwd=await this.validateCwd(cwd);this.configurationConfirmed=false;this.supervised=false;this.preset='default';this.presetPending=false;this.state.change({transcript:[],contextUsagePercent:null,autopilot:null,autopilotSupported:false,selectedSession:null,models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null});const result=await this.transport.rpc('session/new',{cwd,mcpServers:[]});this.adopt(result.sessionId,cwd,result);try{await this.setAutopilot(result.sessionId,this.autopilot);}catch(e){this.state.change({selectedSession:null});throw e;}await this.list();}
   async load(sessionId,confirmed){
     this.requireIdle();if(!confirmed)throw new Error('Confirm desktop handoff before restoring a session');
     const session=this.state.data.sessions.find(s=>s.sessionId===sessionId);if(!session)throw new Error('Session no longer exists. Refresh the list.');
     const metadata=session._meta?.kiro||{};
     if(metadata.isProcessing===true||metadata.status==='running')throw new Error('This session is running on another client. Finish or stop its turn first.');
     const cwd=await this.validateCwd(session.cwd);
-    this.supervised=false;this.preset='default';this.presetPending=false;
-    this.state.change({selectedSession:{sessionId,cwd},transcript:[],models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null});
-    try{const reply=await this.transport.rpc('session/load',{sessionId,cwd,mcpServers:[]});this.adopt(sessionId,cwd,reply);await this.supervise(sessionId);}catch(e){this.state.change({selectedSession:null});throw e;}
+    this.configurationConfirmed=false;this.supervised=false;this.preset='default';this.presetPending=false;
+    this.state.change({selectedSession:{sessionId,cwd},transcript:[],contextUsagePercent:null,autopilot:null,autopilotSupported:false,models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null});
+    try{const reply=await this.transport.rpc('session/load',{sessionId,cwd,mcpServers:[]});this.adopt(sessionId,cwd,reply);await this.setAutopilot(sessionId,this.autopilot);}catch(e){this.state.change({selectedSession:null});throw e;}
   }
   async select({kind,value}){
     this.requireIdle();const sessionId=this.state.data.selectedSession?.sessionId;if(!sessionId)throw new Error('Open a session first');
-    if(!this.supervised)throw new Error('Supervised mode has not been confirmed. Reopen the session.');
+    if(!this.configurationConfirmed)throw new Error('Autopilot configuration has not been confirmed. Reopen the session.');
+    if(kind==='autopilot'){if(!['on','off'].includes(value))throw new Error('Unknown Autopilot value');await this.setAutopilot(sessionId,value==='on');return;}
     if(kind==='agent') {
       const preset=PRESETS[value];if(!preset)throw new Error('Unknown agent preset');
       const mode=this.state.data.modes.find(m=>preset.modes.includes(m.id));
@@ -77,7 +82,7 @@ export class KiroAdapter {
   }
   async prompt({text='',attachments=[]}) {
     this.requireIdle();const sessionId=this.state.data.selectedSession?.sessionId;if(!sessionId)throw new Error('Open a session first');
-    if(!this.supervised)throw new Error('Supervised mode has not been confirmed. Reopen the session.');
+    if(!this.configurationConfirmed)throw new Error('Autopilot configuration has not been confirmed. Reopen the session.');
     if(typeof text!=='string'||text.length>100000)throw new Error('Message is too long');
     if(!text.trim()&&!attachments.length)throw new Error('Enter a message or attach media');
     if(!Array.isArray(attachments)||attachments.length>4)throw new Error('Attach at most four images');
@@ -112,6 +117,16 @@ export class KiroAdapter {
     if(p.sessionId && p.sessionId!==this.state.data.selectedSession?.sessionId)return;
     const u=p.update||{};
     if(['agent_message_chunk','user_message_chunk'].includes(u.sessionUpdate)&&u.content?.type==='text')this.state.addText(u.sessionUpdate==='user_message_chunk'?'user':'assistant',u.content.text,{replay:p._meta?.kiro?.isReplay===true||u._meta?.kiro?.isReplay===true});
+    else if(u.sessionUpdate==='session_info_update'){
+      const meta=u._meta?.kiro||{};const percent=meta.usagePercentage??meta.contextUsage?.usagePercentage;
+      if(Number.isFinite(percent))this.state.change({contextUsagePercent:Math.max(0,Math.min(100,percent))});
+      if(meta.kind==='turn_completion'){
+        const amounts=(meta.promptTurnSummaries||[]).filter(v=>Number.isFinite(v.usage)&&v.usage>=0);
+        const credits=amounts.filter(v=>/^credits?$/i.test(v.unit)||/^credits?$/i.test(v.unitPlural));
+        const elapsed=Number.isFinite(meta.elapsedTime)&&meta.elapsedTime>=0?meta.elapsedTime:null;
+        this.state.addTurnSummary({requestId:meta.requestId||meta.requestIds?.at(-1)||amounts.at(-1)?.requestId,creditsUsed:credits.length?credits.reduce((sum,v)=>sum+v.usage,0):null,elapsedMs:elapsed});
+      }
+    }
     else if(u.sessionUpdate==='config_option_update')this.configure({configOptions:u.configOptions});
     else if(u.sessionUpdate==='current_mode_update')this.state.change({currentMode:u.currentModeId});
     else if(['tool_call','tool_call_update'].includes(u.sessionUpdate))this.state.change({activity:u.title||u.status||'Using a tool'});

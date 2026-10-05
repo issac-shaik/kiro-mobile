@@ -14,11 +14,13 @@ Commands:
 | type | fields | behavior |
 | --- | --- | --- |
 | refresh | none | Refresh sessions and account credits |
-| create | cwd | Start a supervised session within an allowed workspace |
+| create | cwd | Start an Autopilot session within an allowed workspace |
 | load | sessionId, handoffConfirmed:true | Restore a saved session after explicit desktop handoff |
-| select | kind:model\|reasoning\|agent, value | Select an advertised config value or supported agent preset |
+| select | kind:model\|reasoning\|agent\|autopilot, value | Select an advertised config value, agent preset, or Autopilot on/off |
 | prompt | text, attachments:[{name,mimeType,data}] | Send text and base64 image blocks through ACP |
 | cancel | none | Request turn cancellation; cancel pending permissions |
 | permission | permissionId, optionId or null | Reply with a real option ID, or cancel the request |
 
 The snapshot includes session descriptors, selected session, bounded transcript, pending permission choices, live model/reasoning catalogs, agent preset/native status, account usage, busy state and push-provider availability. It never includes Kiro account credentials or a push device token. Internal permission `rpcId` is an implementation detail; clients use opaque `id` only.
+
+Autopilot defaults on and is acknowledged by Kiro before sending. Select `kind: "autopilot"` with `value: "on"` or `"off"` while idle. Snapshots expose `autopilot`, `autopilotSupported`, and nullable `contextUsagePercent`. Transcript entries with role `summary` carry `summary.creditsUsed` and `summary.elapsedMs` from Kiro turn-completion telemetry; missing values remain null.

@@ -47,12 +47,40 @@ test('workspace traversal and sibling-prefix bypass are blocked',async()=>{
   try{const a=new KiroAdapter(new State(),{roots:[root],transport:new FakeTransport()});assert.equal(await a.validateCwd(root),await fs.realpath(root));await assert.rejects(a.validateCwd(sibling),/outside/);await assert.rejects(a.validateCwd('relative'),/absolute/);}finally{await fs.rm(tmp,{recursive:true,force:true});}
 });
 test('session load requires explicit handoff consent',async()=>{const a=new KiroAdapter(new State(),{transport:new FakeTransport()});await assert.rejects(a.load('s',false),/Confirm desktop handoff/);});
-test('sending is blocked until Kiro confirms supervision',async()=>{const s=new State();s.change({selectedSession:{sessionId:'s'}});const a=new KiroAdapter(s,{transport:new FakeTransport()});await assert.rejects(a.prompt({text:'edit a file'}),/Supervised mode/);await assert.rejects(a.supervise('s'),/did not confirm/);});
+test('sending is blocked until Kiro confirms Autopilot configuration',async()=>{const s=new State();s.change({selectedSession:{sessionId:'s'}});const a=new KiroAdapter(s,{transport:new FakeTransport()});await assert.rejects(a.prompt({text:'edit a file'}),/Autopilot configuration/);await assert.rejects(a.supervise('s'),/did not confirm/);});
 test('media is sent as ACP prompt blocks; malformed data is rejected',async()=>{
-  const state=new State(),t=new FakeTransport(),a=new KiroAdapter(state,{transport:t});a.supervised=true;state.change({selectedSession:{sessionId:'s'},imageSupported:true});
+  const state=new State(),t=new FakeTransport(),a=new KiroAdapter(state,{transport:t});a.configurationConfirmed=true;state.change({selectedSession:{sessionId:'s'},imageSupported:true});
   await assert.rejects(a.prompt({text:'x',attachments:[{mimeType:'text/html',data:'eA=='}]}),/Unsupported/);
   await a.prompt({text:'Describe it',attachments:[{mimeType:'image/png',data:'eA=='}]});
   const call=t.calls.find(c=>c.method==='session/prompt');assert.equal(call.params.prompt[0].type,'text');assert.equal(call.params.prompt[1].type,'image');assert.equal(call.params.content,undefined);
+});
+test('Autopilot defaults on, acknowledges native configuration and respects idle state',async()=>{
+  const s=new State(),t=new FakeTransport(),a=new KiroAdapter(s,{transport:t});
+  t.rpc=async(method,params)=>{t.calls.push({method,params});return method==='session/set_config_option'?{configOptions:[{id:'autopilot',currentValue:params.value}]}:{};};
+  assert.equal(a.autopilot,true);s.change({selectedSession:{sessionId:'s'}});
+  await a.setAutopilot('s',a.autopilot);assert.equal(s.data.autopilot,true);
+  await a.select({kind:'autopilot',value:'off'});assert.equal(s.data.autopilot,false);assert.equal(a.supervised,true);
+  await assert.rejects(a.select({kind:'autopilot',value:'invalid'}),/Unknown/);
+  s.change({busy:true});await assert.rejects(a.select({kind:'autopilot',value:'on'}),/current turn/);
+  s.change({busy:false});t.rpc=async()=>({});await assert.rejects(a.select({kind:'autopilot',value:'on'}),/did not confirm/);
+  assert.equal(s.data.autopilot,null);await assert.rejects(a.prompt({text:'edit'}),/not been confirmed/);
+});
+test('demo Autopilot completes with metering and off mode requests permission',async()=>{
+  const s=new State(),a=new DemoAdapter(s);await a.start();await a.load();
+  try{await a.prompt({text:'demo'});await new Promise(r=>setTimeout(r,600));assert.equal(s.data.busy,false);assert.equal(s.data.permissions.length,0);assert.equal(s.data.transcript.at(-1).summary.creditsUsed,0.02);
+    await a.select({kind:'autopilot',value:'off'});await a.prompt({text:'demo'});await new Promise(r=>setTimeout(r,600));assert.equal(s.data.permissions.length,1);a.resolvePermission(s.data.permissions[0].id,'deny');assert.equal(s.data.busy,false);
+  }finally{a.close();}
+});
+test('context and turn telemetry use reported values, isolate sessions and deduplicate summaries',()=>{
+  const s=new State(),a=new KiroAdapter(s,{transport:new FakeTransport()});s.change({selectedSession:{sessionId:'s'}});
+  const event=(sessionId,meta)=>a.message({method:'session/update',params:{sessionId,update:{sessionUpdate:'session_info_update',_meta:{kiro:meta}}}});
+  event('other',{kind:'context_usage',usagePercentage:50});assert.equal(s.data.contextUsagePercent,null);
+  event('s',{kind:'context_usage',usagePercentage:24});assert.equal(s.data.contextUsagePercent,24);
+  event('s',{kind:'context_usage',usagePercentage:NaN});assert.equal(s.data.contextUsagePercent,24);
+  const meta={kind:'turn_completion',requestId:'turn1',elapsedTime:1250,promptTurnSummaries:[{usage:0.1,unit:'credit'},{usage:0.2,unitPlural:'credits'},{usage:123,unit:'tokens'}]};
+  event('s',meta);event('s',meta);assert.equal(s.data.transcript.length,1);assert.ok(Math.abs(s.data.transcript[0].summary.creditsUsed-0.3)<1e-9);assert.equal(s.data.transcript[0].summary.elapsedMs,1250);
+  event('s',{kind:'turn_completion',requestId:'turn2',elapsedTime:0});assert.equal(s.data.transcript[1].summary.creditsUsed,null);assert.equal(s.data.transcript[1].summary.elapsedMs,0);
+  event('s',{kind:'turn_completion',requestId:'turn3'});assert.equal(s.data.transcript.length,2);
 });
 test('turn completion and cancellation do not answer stale requests',async()=>{
   const s=new State(),t=new FakeTransport(),a=new KiroAdapter(s,{transport:t});s.change({selectedSession:{sessionId:'s'},busy:true});a.message({id:4,method:'session/request_permission',params:{sessionId:'s',options:[]}});await a.cancel();assert.deepEqual(t.replies[0].result,{outcome:{outcome:'cancelled'}});assert.equal(s.data.permissions.length,0);

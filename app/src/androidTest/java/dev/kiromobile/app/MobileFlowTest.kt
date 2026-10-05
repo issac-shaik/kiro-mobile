@@ -85,6 +85,14 @@ class MobileFlowTest {
             })
         }
         onMain { assertNotNull(text("Default ▾"));assertNotNull(text("Low ▾")) }
+        onMain {
+            assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.Switch>().first().isChecked)
+            assertNotNull(text("123.50 credits remaining"))
+        }
+        click("Context window: 24.0% used")
+        waitUntil { text("24.0% of the context window used")!=null };click("OK")
+        click("Autopilot")
+        waitUntil { views(activity.window.decorView).filterIsInstance<android.widget.Switch>().firstOrNull()?.isChecked==false }
         capture("chat")
         click("Demo · Balanced ▾");item(1);waitUntil { text("Demo · Fast ▾")!=null }
         click("Low ▾");item(1);waitUntil { text("High ▾")!=null }
@@ -105,7 +113,15 @@ class MobileFlowTest {
         capture("permission")
         click("Review request");waitUntil { text("Choose response")!=null };click("Choose response");item(1)
         waitUntil { manager.activeNotifications.none { it.tag?.startsWith("permission:")==true } }
+        waitUntil { text("0.020 credits used · 1.3s elapsed")!=null }
         waitUntil { text("Review request")==null }
+        click("Autopilot")
+        waitUntil { views(activity.window.decorView).filterIsInstance<android.widget.Switch>().firstOrNull()?.isChecked==true }
+        onMain { views(activity.window.decorView).filterIsInstance<EditText>().first().setText("Try Autopilot") }
+        click("Send")
+        waitUntil { windows().filterIsInstance<TextView>().count { it.text.toString()=="0.020 credits used · 1.3s elapsed" }==2 }
+        onMain { assertNull(text("Review request")) }
+        capture("summary")
     }
     @Test fun qrPairingVerifiesPcIdentityAndRejectsReplays() {
         val payload=InstrumentationRegistry.getArguments().getString("qrPairing")

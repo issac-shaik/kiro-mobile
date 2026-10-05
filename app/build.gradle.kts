@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
     namespace = "dev.kiromobile.app"
     compileSdk = 35
-    defaultConfig { applicationId = providers.gradleProperty("kiroApplicationId").getOrElse("dev.kiromobile.app"); minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "0.3.2"
+    defaultConfig { applicationId = providers.gradleProperty("kiroApplicationId").getOrElse("dev.kiromobile.app"); minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "0.3.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Optional fork-owned Firebase project. No account identifiers are committed.
         resValue("string", "firebase_app_id", providers.gradleProperty("firebaseAppId").getOrElse(""))

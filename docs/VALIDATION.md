@@ -1,5 +1,11 @@
 # Validation record
 
+## Version 0.3.3
+
+- Kiro CLI 2.27.1 confirmed native Autopilot on/off, context percentage, and per-turn credit usage and elapsed milliseconds with a short response that used no tools.
+- Android build and lint passed; emulator checks cover the remaining-credit label, default Autopilot, context popup, Markdown, turn summary, permission notifications, and certificate-pinned QR pairing.
+- Companion tests cover failed configuration acknowledgment, busy-state restrictions, session isolation, missing telemetry, summary deduplication, and demo behavior in both Autopilot modes.
+
 Validated on Windows with Kiro CLI 2.25.0 and an Android API 36.1 emulator. The packaged APK targets Android 8.0 and newer; other physical devices have not been tested.
 
 ## Passed

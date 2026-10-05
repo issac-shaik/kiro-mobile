@@ -34,6 +34,6 @@ try{
   console.log(result);
   if(!result.includes('OK (2 tests)'))throw new Error('Android integration test failed');
   await fs.mkdir('dist/screenshots',{recursive:true});
-  for(const name of ['setup','welcome','chat','agents','permission'])await run('pull',`/sdcard/Android/data/dev.kiromobile.app/files/${name}.png`,`dist/screenshots/${name}.png`);
+  for(const name of ['setup','welcome','chat','agents','permission','summary'])await run('pull',`/sdcard/Android/data/dev.kiromobile.app/files/${name}.png`,`dist/screenshots/${name}.png`);
   console.log('Pairing, session controls, chat, background notification and rejection: PASS');
 } catch(e){console.error(e.stdout||e.stderr||e.message);process.exitCode=1;}finally{adapter.close();server.closeAllConnections();tlsServer.closeAllConnections();await Promise.all([new Promise(resolve=>server.close(resolve)),new Promise(resolve=>tlsServer.close(resolve))]);}

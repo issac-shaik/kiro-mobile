@@ -8,6 +8,7 @@ try {
   await adapter.start();console.log('Kiro login and session discovery: OK');
   console.log('Account usage:',state.data.usage?.available?'available':'unavailable');
   await adapter.create(root);
+  await adapter.supervise(state.data.selectedSession.sessionId);
   console.log('Supervised session:',adapter.supervised?'confirmed':'FAILED');
   console.log('Native modes:',state.data.modes.map(m=>m.id).join(', '));
   await new Promise(resolve=>setTimeout(resolve,2000));
