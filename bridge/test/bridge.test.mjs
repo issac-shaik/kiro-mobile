@@ -48,6 +48,27 @@ test('workspace traversal and sibling-prefix bypass are blocked',async()=>{
   try{const a=new KiroAdapter(new State(),{roots:[root],transport:new FakeTransport()});assert.equal(await a.validateCwd(root),await fs.realpath(root));await assert.rejects(a.validateCwd(sibling),/outside/);await assert.rejects(a.validateCwd('relative'),/absolute/);}finally{await fs.rm(tmp,{recursive:true,force:true});}
 });
 test('session load requires explicit handoff consent',async()=>{const a=new KiroAdapter(new State(),{transport:new FakeTransport()});await assert.rejects(a.load('s',false),/Confirm desktop handoff/);});
+test('refresh reloads the selected active session for replay without changing its settings',async()=>{
+  const s=new State(),t=new FakeTransport(),a=new KiroAdapter(s,{transport:t});
+  const root=process.cwd();s.change({autopilot:false,autopilotSupported:true});a.configurationConfirmed=true;
+  a.validateCwd=async cwd=>cwd;
+  t.rpc=async(method,params)=>{
+    t.calls.push({method,params});
+    if(method==='session/list')return {sessions:[{sessionId:'s',cwd:root,title:'Active session',_meta:{kiro:{status:'running',isProcessing:true}}}]};
+    if(method==='session/load'){
+      a.message({method:'session/update',params:{sessionId:'s',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Replayed answer'},_meta:{kiro:{replay:true}}}}});
+      a.message({method:'session/update',params:{sessionId:'s',update:{sessionUpdate:'tool_call',toolCallId:'active-tool',title:'Read file',status:'in_progress',_meta:{kiro:{replay:true}}}}});
+      return {configOptions:[{id:'autopilot',currentValue:'off'}]};
+    }
+    return {};
+  };
+  await a.refresh('s');
+  assert.deepEqual(t.calls.map(c=>c.method),['session/list','session/load','_kiro/account/getUsage']);
+  assert.equal(s.data.transcript.some(m=>m.text==='Replayed answer'),true);
+  assert.equal(s.data.sessionRunning,true);assert.equal(s.data.busy,false);assert.equal(s.data.autopilot,false);
+  a.message({method:'session/update',params:{sessionId:'s',update:{sessionUpdate:'session_info_update',_meta:{kiro:{kind:'turn_completion'}}}}});
+  assert.equal(s.data.sessionRunning,false);
+});
 test('sending is blocked until Kiro confirms Autopilot configuration',async()=>{const s=new State();s.change({selectedSession:{sessionId:'s'}});const a=new KiroAdapter(s,{transport:new FakeTransport()});await assert.rejects(a.prompt({text:'edit a file'}),/Autopilot configuration/);await assert.rejects(a.supervise('s'),/did not confirm/);});
 test('media is sent as ACP prompt blocks; malformed data is rejected',async()=>{
   const state=new State(),t=new FakeTransport(),a=new KiroAdapter(state,{transport:t});a.configurationConfirmed=true;state.change({selectedSession:{sessionId:'s'},imageSupported:true});
@@ -79,7 +100,8 @@ test('context and turn telemetry use reported values, isolate sessions and dedup
   event('s',{kind:'context_usage',usagePercentage:24});assert.equal(s.data.contextUsagePercent,24);
   event('s',{kind:'context_usage',usagePercentage:NaN});assert.equal(s.data.contextUsagePercent,24);
   const meta={kind:'turn_completion',requestId:'turn1',elapsedTime:1250,promptTurnSummaries:[{usage:0.1,unit:'credit'},{usage:0.2,unitPlural:'credits'},{usage:123,unit:'tokens'}]};
-  event('s',meta);event('s',meta);assert.equal(s.data.transcript.length,1);assert.ok(Math.abs(s.data.transcript[0].summary.creditsUsed-0.3)<1e-9);assert.equal(s.data.transcript[0].summary.elapsedMs,1250);
+  event('s',{kind:'turn_start',isProcessing:true});assert.equal(s.data.sessionRunning,true);
+  event('s',meta);event('s',meta);assert.equal(s.data.sessionRunning,false);assert.equal(s.data.transcript.length,1);assert.ok(Math.abs(s.data.transcript[0].summary.creditsUsed-0.3)<1e-9);assert.equal(s.data.transcript[0].summary.elapsedMs,1250);
   event('s',{kind:'turn_completion',requestId:'turn2',elapsedTime:0});assert.equal(s.data.transcript[1].summary.creditsUsed,null);assert.equal(s.data.transcript[1].summary.elapsedMs,0);
   event('s',{kind:'turn_completion',requestId:'turn3'});assert.equal(s.data.transcript.length,2);
 });

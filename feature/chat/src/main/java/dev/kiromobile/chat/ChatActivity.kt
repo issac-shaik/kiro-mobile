@@ -69,6 +69,7 @@ open class ChatActivity : Activity() {
     private lateinit var autopilot: Switch
     private lateinit var contextCircle: View
     private var syncingAutopilot=false
+    private var refreshingSession=false
     private lateinit var send: ImageButton
     private lateinit var attach: ImageButton
     private lateinit var stop: ImageButton
@@ -198,7 +199,7 @@ open class ChatActivity : Activity() {
         val menu=iconButton("More options",Glyph.MORE) {}
         menu.setOnClickListener {
             PopupMenu(this,menu).apply {
-                getMenu().add("Refresh").setOnMenuItemClickListener { issue(command("refresh"));true }
+                getMenu().add("Refresh").setOnMenuItemClickListener { refreshSession();true }
                 getMenu().add("Settings").setOnMenuItemClickListener { settings();true }
                 show()
             }
@@ -288,17 +289,20 @@ open class ChatActivity : Activity() {
         model.text=(s?.models?.find { it.id==s.currentModel }?.name ?: "Model")+" ▾"
         reasoning.text=(s?.reasoning?.find { it.id==s.currentReasoning }?.name ?: "Reasoning")+" ▾"
         val ready=s?.selectedId!=null && s.status=="online" && error==null
-        val working=s?.busy==true||s?.permissions?.isNotEmpty()==true
+        val working=s?.busy==true||s?.sessionRunning==true||s?.permissions?.isNotEmpty()==true
+        val controlsBlocked=s?.busy==true||s?.sessionRunning==true||s?.permissions?.isNotEmpty()==true
         workStatus.text=when { error!=null -> "Reconnecting";s?.status!="online" -> "Connecting";working -> "Kiro is working";else -> "Idle" }
         workStatus.setTextColor(if(working)purple else muted)
-        agent.isEnabled=ready&&s?.busy!=true;model.isEnabled=agent.isEnabled;reasoning.isEnabled=agent.isEnabled
-        autopilot.isEnabled=ready&&s?.busy!=true&&s?.permissions.isNullOrEmpty()&&s?.autopilotSupported==true&&s.autopilot!=null
-        attach.isEnabled=ready&&s?.imageSupported==true&&s.busy!=true
-        send.isEnabled=ready&&s?.busy!=true&&s?.autopilot!=null
-        send.visibility=if(s?.busy==true)View.GONE else View.VISIBLE
+        agent.isEnabled=ready&&!controlsBlocked;model.isEnabled=agent.isEnabled;reasoning.isEnabled=agent.isEnabled
+        autopilot.isEnabled=ready&&!controlsBlocked&&s?.autopilotSupported==true&&s.autopilot!=null
+        attach.isEnabled=ready&&s?.imageSupported==true&&!controlsBlocked
+        send.isEnabled=ready&&!controlsBlocked&&s?.autopilot!=null
+        send.visibility=if(s?.busy==true||s?.sessionRunning==true)View.GONE else View.VISIBLE
         stop.visibility=if(s?.busy==true)View.VISIBLE else View.GONE
         model.contentDescription="Model: ${model.text}";reasoning.contentDescription="Reasoning: ${reasoning.text}";agent.contentDescription="Agent: ${agent.text}"
         banner.text=error ?: s?.error ?: s?.pushError ?: when {
+            refreshingSession -> "Refreshing session…"
+            s?.sessionRunning==true -> "Session active on your PC · controls paused"
             s?.permissions?.isNotEmpty()==true -> "Permission needed · your agent is waiting"
             s?.demo==true -> "Demo data · no account connected"
             s==null||s.status!="online" -> "Connecting to your PC…"
@@ -391,6 +395,15 @@ open class ChatActivity : Activity() {
     }
     private fun issue(c: org.json.JSONObject, done: (() -> Unit)?=null) {
         SessionHub.send(c) { error -> if(error!=null){toast(error);render(SessionHub.snapshot,SessionHub.error)} else done?.invoke() }
+    }
+    private fun refreshSession() {
+        if(refreshingSession)return
+        refreshingSession=true;render(state,SessionHub.error)
+        SessionHub.send(command("refresh")) { error ->
+            refreshingSession=false;render(SessionHub.snapshot,SessionHub.error)
+            if(error!=null)toast("Refresh failed: $error")
+            else toast(if(SessionHub.snapshot?.selectedId!=null)"Session refreshed" else "Session list refreshed")
+        }
     }
     private fun sessions() {
         val list=state?.sessions ?: emptyList()

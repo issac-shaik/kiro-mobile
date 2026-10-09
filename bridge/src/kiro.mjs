@@ -33,7 +33,32 @@ export class KiroAdapter {
     if(!allowed)throw new Error('Workspace is outside the companion’s allowed roots. Add it to KIRO_WORKSPACES on the PC.');
     if(!(await fs.stat(actual)).isDirectory())throw new Error('Workspace must be a directory');return actual;
   }
-  async list(){const reply=await this.transport.rpc('session/list',{});this.state.change({sessions:(reply.sessions||[]).map(s=>({...s,owned:s.sessionId===this.state.data.selectedSession?.sessionId}))});return this.state.data.sessions;}
+  async list(){
+    const reply=await this.transport.rpc('session/list',{});
+    const sessions=(reply.sessions||[]).map(s=>({...s,owned:s.sessionId===this.state.data.selectedSession?.sessionId}));
+    const selected=sessions.find(s=>s.sessionId===this.state.data.selectedSession?.sessionId);
+    const metadata=selected?._meta?.kiro||{};
+    this.state.change({sessions,sessionRunning:metadata.isProcessing===true||metadata.status==='running'});
+    return sessions;
+  }
+  async refresh(sessionId){
+    this.requireIdle();
+    await this.list();
+    let selected=this.state.data.selectedSession;
+    if(!selected&&sessionId){
+      const session=this.state.data.sessions.find(s=>s.sessionId===sessionId);
+      if(!session)throw new Error('The selected session is no longer available. Choose it again from Sessions.');
+      const metadata=session._meta?.kiro||{};
+      this.state.change({selectedSession:{sessionId:session.sessionId,cwd:session.cwd},sessionRunning:metadata.isProcessing===true||metadata.status==='running'});
+      selected=this.state.data.selectedSession;
+    }
+    if(selected){
+      const session=this.state.data.sessions.find(s=>s.sessionId===selected.sessionId);
+      if(!session)throw new Error('The selected session is no longer available. Choose it again from Sessions.');
+      await this.restore(session,{configureAutopilot:false});
+    }
+    await this.usage();
+  }
   adopt(id,cwd,result){this.state.change({selectedSession:{sessionId:id,cwd},error:null});this.configure(result);}
   configure(result={}) {
     const options=result.configOptions||[];
@@ -53,11 +78,19 @@ export class KiroAdapter {
     const session=this.state.data.sessions.find(s=>s.sessionId===sessionId);if(!session)throw new Error('Session no longer exists. Refresh the list.');
     const metadata=session._meta?.kiro||{};
     if(metadata.isProcessing===true||metadata.status==='running')throw new Error('This session is running on another client. Finish or stop its turn first.');
+    return this.restore(session,{configureAutopilot:true});
+  }
+  async restore(session,{configureAutopilot}){
     const cwd=await this.validateCwd(session.cwd);
-    this.configurationConfirmed=false;this.supervised=false;this.preset='default';this.presetPending=false;
-    this.state.change({selectedSession:{sessionId,cwd},transcript:[],contextUsagePercent:null,autopilot:null,autopilotSupported:false,models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null});
+    const prior={selectedSession:this.state.data.selectedSession,transcript:this.state.data.transcript,contextUsagePercent:this.state.data.contextUsagePercent,sessionRunning:this.state.data.sessionRunning};
+    if(configureAutopilot){this.configurationConfirmed=false;this.supervised=false;this.preset='default';this.presetPending=false;}
+    this.state.change({selectedSession:{sessionId:session.sessionId,cwd},transcript:[],contextUsagePercent:null,...configureAutopilot?{autopilot:null,autopilotSupported:false,models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null}:{}});
     this.loading=true;
-    try{const reply=await this.transport.rpc('session/load',{sessionId,cwd,mcpServers:[]});this.state.finish();this.adopt(sessionId,cwd,reply);await this.setAutopilot(sessionId,this.autopilot);}catch(e){this.state.change({selectedSession:null});throw e;}finally{this.loading=false;}
+    try{
+      const reply=await this.transport.rpc('session/load',{sessionId:session.sessionId,cwd,mcpServers:[]});
+      if(configureAutopilot){this.state.finish();this.adopt(session.sessionId,cwd,reply);await this.setAutopilot(session.sessionId,this.autopilot);}
+      else this.adopt(session.sessionId,cwd,reply);
+    }catch(e){this.state.change(prior);throw e;}finally{this.loading=false;}
   }
   async select({kind,value}){
     this.requireIdle();const sessionId=this.state.data.selectedSession?.sessionId;if(!sessionId)throw new Error('Open a session first');
@@ -122,12 +155,15 @@ export class KiroAdapter {
     const replay=this.loading===true||p._meta?.kiro?.isReplay===true||u._meta?.kiro?.isReplay===true||p._meta?.kiro?.replay===true||u._meta?.kiro?.replay===true;
     if(['agent_message_chunk','user_message_chunk','agent_thought_chunk'].includes(u.sessionUpdate)&&u.content?.type==='text'){
       const role=u.sessionUpdate==='user_message_chunk'?'user':u.sessionUpdate==='agent_thought_chunk'?'thinking':'assistant';
+      if(!replay&&(role==='assistant'||role==='thinking'))this.state.change({sessionRunning:true});
       if(!replay)this.state.data.activity=role==='thinking'?'Thinking…':null;
       this.state.addText(role,u.content.text,{replay});
     }
     else if(u.sessionUpdate==='session_info_update'){
       const meta=u._meta?.kiro||{};const percent=meta.usagePercentage??meta.contextUsage?.usagePercentage;
       if(Number.isFinite(percent))this.state.change({contextUsagePercent:Math.max(0,Math.min(100,percent))});
+      if(meta.kind==='turn_completion'||meta.isProcessing===false||['idle','completed','failed'].includes(meta.status))this.state.change({sessionRunning:false});
+      else if(meta.kind==='turn_start'||meta.isProcessing===true||meta.status==='running')this.state.change({sessionRunning:true});
       if(meta.kind==='turn_completion'){
         const amounts=(meta.promptTurnSummaries||[]).filter(v=>Number.isFinite(v.usage)&&v.usage>=0);
         const credits=amounts.filter(v=>/^credits?$/i.test(v.unit)||/^credits?$/i.test(v.unitPlural));
@@ -138,6 +174,7 @@ export class KiroAdapter {
     else if(u.sessionUpdate==='config_option_update')this.configure({configOptions:u.configOptions});
     else if(u.sessionUpdate==='current_mode_update')this.state.change({currentMode:u.currentModeId});
     else if(['tool_call','tool_call_update'].includes(u.sessionUpdate)){
+      if(['pending','in_progress'].includes(u.status))this.state.change({sessionRunning:true});
       if(!replay)this.state.data.activity=['completed','failed'].includes(u.status)?null:u.title||'Using a tool…';
       this.state.updateTool(u,{replay});
     }

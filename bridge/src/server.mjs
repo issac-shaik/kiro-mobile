@@ -53,7 +53,7 @@ export function createServer({state,adapter,token,push,tls,pairing,devices=new M
       if(requests.has(b.requestId)){const prior=requests.get(b.requestId);if(prior.digest!==digest)throw new Error('requestId was reused for a different command');return reply(200,await prior.promise);}
       const run=async()=>{
         switch(b.type){
-          case 'refresh': await adapter.list();await adapter.usage();break;
+          case 'refresh': await adapter.refresh(b.sessionId);break;
           case 'create':await adapter.create(b.cwd);break;
           case 'load':await adapter.load(b.sessionId,b.handoffConfirmed===true);break;
           case 'select':await adapter.select(b);break;

@@ -18,7 +18,7 @@ data class Snapshot(
     val permissions: List<Permission>, val models: List<Choice>, val reasoning: List<Choice>,
     val currentModel: String?, val currentReasoning: String?, val preset: String,
     val presetNative: Boolean, val credits: Double?, val usageDescription: String,
-    val pushConfigured: Boolean, val pushError: String?, val busy: Boolean, val demo: Boolean,
+    val pushConfigured: Boolean, val pushError: String?, val busy: Boolean, val sessionRunning: Boolean, val demo: Boolean,
     val imageSupported: Boolean, val connectionKind: String, val activity: String?,
     val autopilot: Boolean?, val autopilotSupported: Boolean, val contextUsagePercent: Double?
 ) {
@@ -44,7 +44,7 @@ data class Snapshot(
                 j.optJSONArray("models").choices(),j.optJSONArray("reasoning").choices(),j.stringOrNull("currentModel"),j.stringOrNull("currentReasoning"),j.optString("agentPreset","default"),j.optBoolean("agentPresetNative"),
                 if(usage?.optBoolean("available")==true && !usage.isNull("remaining")) usage.optDouble("remaining") else null,
                 usage?.optString("plan")?.takeIf { it.isNotBlank() && it!="null" } ?: usage?.optString("reason") ?: "Usage not available",
-                push?.optBoolean("configured")==true,push?.stringOrNull("error"),j.optBoolean("busy"),j.optString("source")=="demo",j.optBoolean("imageSupported"),j.optString("connectionKind","resume"),j.stringOrNull("activity"),
+                push?.optBoolean("configured")==true,push?.stringOrNull("error"),j.optBoolean("busy"),j.optBoolean("sessionRunning"),j.optString("source")=="demo",j.optBoolean("imageSupported"),j.optString("connectionKind","resume"),j.stringOrNull("activity"),
                 if(j.isNull("autopilot"))null else j.optBoolean("autopilot"),j.optBoolean("autopilotSupported"),j.numberOrNull("contextUsagePercent"))
         }
     }

@@ -12,7 +12,7 @@ function toolContent(content){
   }).filter(Boolean).join('\n\n'),40000);
 }
 export class State extends EventEmitter {
-  constructor(){super();this.data={revision:1,status:'connecting',error:null,sessions:[],selectedSession:null,transcript:[],permissions:[],models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null,usage:null,autopilot:null,autopilotSupported:false,contextUsagePercent:null,push:{configured:false},imageSupported:false,busy:false,source:'local',connectionKind:'resume'};}
+  constructor(){super();this.data={revision:1,status:'connecting',error:null,sessions:[],selectedSession:null,transcript:[],permissions:[],models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null,usage:null,autopilot:null,autopilotSupported:false,contextUsagePercent:null,push:{configured:false},imageSupported:false,busy:false,sessionRunning:false,source:'local',connectionKind:'resume'};}
   change(values={}){Object.assign(this.data,values);this.data.revision++;this.emit('change',this.data);}
   addText(role,text,{replay=false}={}) {
     if(typeof text!=='string'||!text)return;
@@ -60,7 +60,7 @@ export class State extends EventEmitter {
     this.trim();
     this.change();
   }
-  finish(){for(const m of this.data.transcript){m.streaming=false;if(m.tool&&['pending','in_progress'].includes(m.tool.status)){m.tool.status='interrupted';m.tool.waitingForPermission=false;}}this.change({busy:false,activity:null});}
+  finish(){for(const m of this.data.transcript){m.streaming=false;if(m.tool&&['pending','in_progress'].includes(m.tool.status)){m.tool.status='interrupted';m.tool.waitingForPermission=false;}}this.change({busy:false,sessionRunning:false,activity:null});}
 }
 export function normalizeUsage(reply) {
   let data=reply;

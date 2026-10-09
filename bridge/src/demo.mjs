@@ -3,6 +3,7 @@ export class DemoAdapter {
   constructor(state,{onPermission=()=>{}}={}){this.state=state;this.onPermission=onPermission;}
   async start(){this.state.change({status:'online',source:'demo',autopilot:true,autopilotSupported:true,contextUsagePercent:24,imageSupported:true,sessions:[{sessionId:'demo-session',title:'Explore your mobile workspace',cwd:'Demo workspace'}],models:[{id:'demo-balanced',name:'Demo · Balanced'},{id:'demo-fast',name:'Demo · Fast'}],reasoning:[{id:'low',name:'Low'},{id:'high',name:'High'}],currentModel:'demo-balanced',currentReasoning:'low',usage:{available:true,remaining:123.5,plan:'Demo data',pools:[]},connectionKind:'demo'});}
   async list(){}
+  async refresh(sessionId){await this.list();if(this.state.data.selectedSession||sessionId==='demo-session')await this.load();await this.usage();}
   async create(){await this.load('demo-session',true);}
   async load(){this.state.change({selectedSession:{sessionId:'demo-session',cwd:'Demo workspace'},transcript:[]});this.state.addText('assistant','Welcome to Kiro Mobile. This is a local demo, with no connection to your account. Send a message to try streaming and a permission request.');this.state.finish();}
   async usage(){}
