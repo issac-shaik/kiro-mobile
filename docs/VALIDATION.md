@@ -1,5 +1,12 @@
 # Validation record
 
+## Version 0.3.4
+
+- 27 companion tests passed, covering thinking chunk order, tool updates by ID, partial field updates, failed/interrupted calls, permissions, session isolation, replay, and bounded tool output.
+- Android build and lint passed. Both emulator flows passed, including streamed Markdown thinking, expanding tool input/output, failure status, and keeping a row collapsed through later updates.
+- Real Kiro V3 emitted file-read tool calls and results, which replayed on resume. A reasoning task using an advertised Claude Sonnet 4.6 model emitted 425 thinking chunks into one transcript entry. The Auto model did not emit thinking for the earlier fixture prompts; visibility depends on the events Kiro provides.
+- Reviewed activity and streaming-thinking screenshots. No physical phone validation was performed here.
+
 ## Version 0.3.3
 
 - Kiro CLI 2.27.1 confirmed native Autopilot on/off, context percentage, and per-turn credit usage and elapsed milliseconds with a short response that used no tools.

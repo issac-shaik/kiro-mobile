@@ -24,3 +24,7 @@ Commands:
 The snapshot includes session descriptors, selected session, bounded transcript, pending permission choices, live model/reasoning catalogs, agent preset/native status, account usage, busy state and push-provider availability. It never includes Kiro account credentials or a push device token. Internal permission `rpcId` is an implementation detail; clients use opaque `id` only.
 
 Autopilot defaults on and is acknowledged by Kiro before sending. Select `kind: "autopilot"` with `value: "on"` or `"off"` while idle. Snapshots expose `autopilot`, `autopilotSupported`, and nullable `contextUsagePercent`. Transcript entries with role `summary` carry `summary.creditsUsed` and `summary.elapsedMs` from Kiro turn-completion telemetry; missing values remain null.
+
+Transcript activity: `role: "thinking"` carries streamed Markdown in `text`. `role: "tool"` carries a stable `tool:<toolCallId>` ID and a `tool` object with `title`, `kind`, `status`, and optional `input`, `output`, `content`, `locations`, `failureReason`, and `waitingForPermission`. Partial tool updates retain omitted fields; supplied content replaces the previous content. Replay is marked inactive, and unfinished calls become interrupted when a turn or connection ends. Transcript text and tool details share a bounded history.
+
+Protocol references: [Kiro V3 session updates](https://kiro.dev/docs/cli/v3/acp-migration/#4-handle-session-updates), [ACP tool calls](https://agentclientprotocol.com/protocol/v1/tool-calls).

@@ -78,6 +78,10 @@ open class ChatActivity : Activity() {
     private var lastRender=""
     private var renderedIds=emptyList<String>()
     private val messageViews=mutableMapOf<String,TextView>()
+    private data class ActivityViews(val header: TextView,val status: TextView,val body: TextView,var message: Message)
+    private val activityViews=mutableMapOf<String,ActivityViews>()
+    private val activityExpanded=mutableMapOf<String,Boolean>()
+    private var renderedSessionId: String?=null
     private val attachments=mutableListOf<Attachment>()
     private val observer: (Snapshot?,String?)->Unit={snapshot,error-> if(screenPaired)render(snapshot,error) }
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
@@ -184,7 +188,7 @@ open class ChatActivity : Activity() {
         }.start()
     }
     private fun chat() {
-        screenPaired=true;lastRender="";renderedIds=emptyList();messageViews.clear();page()
+        screenPaired=true;lastRender="";renderedIds=emptyList();messageViews.clear();activityViews.clear();page()
         val header=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(16),dp(4),dp(4),dp(4));setBackgroundColor(KiroTheme.chrome) }
         header.addView(wordmark());header.addView(View(this),LinearLayout.LayoutParams(0,1,1f))
         header.addView(iconButton("Sessions",Glyph.HISTORY) { sessions() })
@@ -261,6 +265,7 @@ open class ChatActivity : Activity() {
     }
     private fun render(s: Snapshot?,error: String?) {
         state=s
+        if(renderedSessionId!=s?.selectedId){renderedSessionId=s?.selectedId;activityExpanded.clear();lastRender="";renderedIds=emptyList();transcript.removeAllViews();messageViews.clear();activityViews.clear()}
         status.text=when { error!=null -> "○ Reconnecting";s?.status=="online" -> if(s.demo) "● Demo connection" else "● PC connected";else -> "○ Connecting" }
         status.setTextColor(if(s?.status=="online"&&error==null)green else muted)
         credits.text=s?.credits?.let { String.format(Locale.US,"%,.2f credits remaining",it) } ?: "Credits remaining unavailable"
@@ -292,14 +297,15 @@ open class ChatActivity : Activity() {
             else -> ""
         }
         banner.visibility=if(banner.text.isNullOrBlank())View.GONE else View.VISIBLE
-        val signature=s?.messages?.joinToString("|") { it.id+it.text+it.streaming+it.creditsUsed+it.elapsedMs } ?: "empty"
+        val signature=s?.messages?.joinToString("|") { it.toString() } ?: "empty"
         if(signature!=lastRender) {
             lastRender=signature
             val nearBottom=transcriptScroll.getChildAt(0)?.let { it.height-transcriptScroll.height-transcriptScroll.scrollY<dp(100) } ?: true
             val messages=s?.messages ?: emptyList()
             val ids=messages.map { it.id }
             val appendOnly=renderedIds.isNotEmpty()&&ids.take(renderedIds.size)==renderedIds
-            if(!appendOnly){transcript.removeAllViews();messageViews.clear();renderedIds=emptyList()}
+            if(!appendOnly){transcript.removeAllViews();messageViews.clear();activityViews.clear();renderedIds=emptyList()}
+            activityExpanded.keys.retainAll(ids.toSet())
             if(s?.messages.isNullOrEmpty()) {
                 val welcome=column().apply { gravity=Gravity.CENTER;setPadding(dp(16),dp(40),dp(16),dp(30)) }
                 welcome.addView(mark(48));gap(welcome,20)
@@ -309,6 +315,7 @@ open class ChatActivity : Activity() {
                 welcome.addView(button("Start a new chat") { createSession() })
                 transcript.addView(welcome)
             } else messages.forEach { m ->
+                if(m.role=="thinking"||m.role=="tool") { renderActivity(m);return@forEach }
                 if(m.role=="summary") {
                     val value=listOfNotNull(m.creditsUsed?.let { String.format(Locale.US,"%.3f credits used",it) },m.elapsedMs?.let { String.format(Locale.US,"%.1fs elapsed",it/1000) }).joinToString(" · ")
                     messageViews[m.id]?.let { it.text=value;return@forEach }
@@ -339,6 +346,33 @@ open class ChatActivity : Activity() {
             card.addView(text(p.title,14f,ink,true));gap(card,8)
             card.addView(button("Review request") { review(p) });permissionBox.addView(card)
         }
+    }
+    private fun renderActivity(m: Message) {
+        val existing=activityViews[m.id]
+        if(existing!=null){existing.message=m;updateActivity(existing);return}
+        val card=column().apply { background=box(panel,8,KiroTheme.border);setPadding(dp(12),dp(4),dp(12),dp(8)) }
+        val header=text("",13f,ink,true).apply { minHeight=dp(44);gravity=Gravity.CENTER_VERTICAL;setSingleLine();ellipsize=TextUtils.TruncateAt.END;isFocusable=true }
+        val status=text("",11f,muted).apply { setPadding(dp(16),0,0,dp(4)) }
+        val body=text("",13f,muted).apply { setTextIsSelectable(true);setPadding(dp(4),dp(8),dp(4),dp(8));if(m.role=="tool")typeface=Typeface.MONOSPACE }
+        val views=ActivityViews(header,status,body,m);activityViews[m.id]=views
+        header.setOnClickListener { activityExpanded[m.id]=!isActivityExpanded(views.message);updateActivity(views) }
+        card.addView(header);card.addView(status);card.addView(body)
+        transcript.addView(card,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(10) })
+        updateActivity(views)
+    }
+    private fun isActivityExpanded(m: Message)=activityExpanded[m.id] ?: (m.role=="thinking"&&m.streaming)
+    private fun updateActivity(views: ActivityViews) {
+        val m=views.message;val thinking=m.role=="thinking";val expanded=isActivityExpanded(m)
+        val title=if(thinking)if(m.streaming)"Thinking…" else "Thinking" else m.tool?.title ?: "Tool call"
+        views.header.text=(if(expanded)"▾ " else "▸ ")+title
+        views.header.contentDescription=(if(expanded)"Collapse " else "Expand ")+title
+        views.header.setTextColor(if(thinking)purple else ink)
+        views.status.text=if(thinking)if(m.streaming)"Streaming" else "Thoughts from Kiro" else m.tool?.status ?: "Status unavailable"
+        views.status.setTextColor(when(m.tool?.status){"Failed","Denied","Cancelled","Interrupted","Needs approval" -> KiroTheme.warning;"Completed" -> green;else -> muted})
+        views.body.visibility=if(expanded)View.VISIBLE else View.GONE
+        val body=if(thinking)m.text else m.tool?.details?.takeIf { it.isNotBlank() } ?: "No details reported yet."
+        // Hidden tool output is rendered only when expanded; retain the row across streaming updates.
+        if(expanded&&views.body.tag!=body){if(thinking)markdown.setMarkdown(views.body,body) else views.body.text=body;views.body.tag=body}
     }
     private fun issue(c: org.json.JSONObject, done: (() -> Unit)?=null) {
         SessionHub.send(c) { error -> if(error!=null){toast(error);render(SessionHub.snapshot,SessionHub.error)} else done?.invoke() }

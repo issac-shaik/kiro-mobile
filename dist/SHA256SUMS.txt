@@ -1,1 +1,1 @@
-cfac6ed252839e98dfe90dfa03e9011d2671de86cd0f7552977b6a9e169d176f  kiro-mobile-debug.apk
+37a6d7429cf0b23512e92f783bba37ab8aea59bcc34a052cec12dcfadf3be459  kiro-mobile-debug.apk

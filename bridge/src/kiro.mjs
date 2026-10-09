@@ -16,7 +16,7 @@ export class KiroAdapter {
     this.state=state;this.roots=roots.map(r=>path.resolve(r));this.transport=transport||new AcpTransport();this.onPermission=onPermission;this.extensions=[];this.preset='default';this.presetPending=false;this.supervised=false;
     this.configurationConfirmed=false;this.autopilot=true;
     this.transport.on('message',m=>this.message(m));
-    this.transport.on('unavailable',error=>{this.state.data.permissions=[];this.state.change({status:'offline',error,busy:false});});
+    this.transport.on('unavailable',error=>{this.state.data.permissions=[];this.state.finish();this.state.change({status:'offline',error});});
   }
   async start(){
     await this.transport.start();
@@ -56,7 +56,8 @@ export class KiroAdapter {
     const cwd=await this.validateCwd(session.cwd);
     this.configurationConfirmed=false;this.supervised=false;this.preset='default';this.presetPending=false;
     this.state.change({selectedSession:{sessionId,cwd},transcript:[],contextUsagePercent:null,autopilot:null,autopilotSupported:false,models:[],reasoning:[],modes:[],currentModel:null,currentReasoning:null,currentMode:null});
-    try{const reply=await this.transport.rpc('session/load',{sessionId,cwd,mcpServers:[]});this.adopt(sessionId,cwd,reply);await this.setAutopilot(sessionId,this.autopilot);}catch(e){this.state.change({selectedSession:null});throw e;}
+    this.loading=true;
+    try{const reply=await this.transport.rpc('session/load',{sessionId,cwd,mcpServers:[]});this.state.finish();this.adopt(sessionId,cwd,reply);await this.setAutopilot(sessionId,this.autopilot);}catch(e){this.state.change({selectedSession:null});throw e;}finally{this.loading=false;}
   }
   async select({kind,value}){
     this.requireIdle();const sessionId=this.state.data.selectedSession?.sessionId;if(!sessionId)throw new Error('Open a session first');
@@ -95,12 +96,12 @@ export class KiroAdapter {
     }
     const instructions=this.presetPending?PRESETS[this.preset].prompt+'\n\n':'';
     if(text.trim()||instructions)content.unshift({type:'text',text:instructions+text});
-    this.state.addText('user',text+(attachments.length?`\n[${attachments.length} image attachment(s)]`:''));this.state.change({busy:true,error:null});this.presetPending=false;
+    this.state.addText('user',text+(attachments.length?`\n[${attachments.length} image attachment(s)]`:''));this.state.change({busy:true,error:null,activity:null});this.presetPending=false;
     // The request runs in the background; the state stream carries tool and permission events.
     this.transport.rpc('session/prompt',{sessionId,prompt:content},24*60*60*1000).then(()=>this.state.finish()).catch(e=>{this.state.finish();this.state.change({error:e.message});}).finally(()=>this.usage().catch(()=>{}));
   }
   async cancel(){const sessionId=this.state.data.selectedSession?.sessionId;if(!sessionId)return;this.transport.send({jsonrpc:'2.0',method:'session/cancel',params:{sessionId}});for(const p of [...this.state.data.permissions])this.resolvePermission(p.id,null);}
-  resolvePermission(id,optionId){const p=this.state.data.permissions.find(p=>p.id===id);if(!p)throw new Error('Permission request has expired or was already answered');if(optionId!=null&&!p.options.some(o=>o.optionId===optionId))throw new Error('Unknown permission choice');this.transport.reply(p.rpcId,{outcome:optionId==null?{outcome:'cancelled'}:{outcome:'selected',optionId}});this.state.change({permissions:this.state.data.permissions.filter(p=>p.id!==id)});}
+  resolvePermission(id,optionId){const p=this.state.data.permissions.find(p=>p.id===id);if(!p)throw new Error('Permission request has expired or was already answered');if(optionId!=null&&!p.options.some(o=>o.optionId===optionId))throw new Error('Unknown permission choice');this.transport.reply(p.rpcId,{outcome:optionId==null?{outcome:'cancelled'}:{outcome:'selected',optionId}});if(p.toolCall)this.state.updateTool({toolCallId:p.toolCall.toolCallId},{waitingForPermission:false});this.state.change({permissions:this.state.data.permissions.filter(p=>p.id!==id)});}
   async usage(){
     // Current Kiro builds implement their own usage endpoint without advertising it.
     // This isolated read-only probe is allowed to fail; never infer balance from turn cost.
@@ -109,6 +110,8 @@ export class KiroAdapter {
   message(m){
     if(m.method==='session/request_permission'&&m.id!=null){
       const p=m.params||{};const permission={id:crypto.randomUUID(),rpcId:m.id,sessionId:p.sessionId,title:p.toolCall?.title||'Kiro needs permission',toolCall:p.toolCall,options:p.options||[],createdAt:new Date().toISOString()};
+      if(p.sessionId&&p.sessionId!==this.state.data.selectedSession?.sessionId){this.transport.reply(m.id,{outcome:{outcome:'cancelled'}});return;}
+      if(p.toolCall)this.state.updateTool(p.toolCall,{waitingForPermission:true});
       this.state.change({permissions:[...this.state.data.permissions,permission]});Promise.resolve(this.onPermission(permission)).catch(()=>{});return;
     }
     if(m.id!=null&&m.method){this.transport.reject(m.id);return;}
@@ -116,7 +119,12 @@ export class KiroAdapter {
     const p=m.params||{};
     if(p.sessionId && p.sessionId!==this.state.data.selectedSession?.sessionId)return;
     const u=p.update||{};
-    if(['agent_message_chunk','user_message_chunk'].includes(u.sessionUpdate)&&u.content?.type==='text')this.state.addText(u.sessionUpdate==='user_message_chunk'?'user':'assistant',u.content.text,{replay:p._meta?.kiro?.isReplay===true||u._meta?.kiro?.isReplay===true});
+    const replay=this.loading===true||p._meta?.kiro?.isReplay===true||u._meta?.kiro?.isReplay===true||p._meta?.kiro?.replay===true||u._meta?.kiro?.replay===true;
+    if(['agent_message_chunk','user_message_chunk','agent_thought_chunk'].includes(u.sessionUpdate)&&u.content?.type==='text'){
+      const role=u.sessionUpdate==='user_message_chunk'?'user':u.sessionUpdate==='agent_thought_chunk'?'thinking':'assistant';
+      if(!replay)this.state.data.activity=role==='thinking'?'Thinking…':null;
+      this.state.addText(role,u.content.text,{replay});
+    }
     else if(u.sessionUpdate==='session_info_update'){
       const meta=u._meta?.kiro||{};const percent=meta.usagePercentage??meta.contextUsage?.usagePercentage;
       if(Number.isFinite(percent))this.state.change({contextUsagePercent:Math.max(0,Math.min(100,percent))});
@@ -129,7 +137,10 @@ export class KiroAdapter {
     }
     else if(u.sessionUpdate==='config_option_update')this.configure({configOptions:u.configOptions});
     else if(u.sessionUpdate==='current_mode_update')this.state.change({currentMode:u.currentModeId});
-    else if(['tool_call','tool_call_update'].includes(u.sessionUpdate))this.state.change({activity:u.title||u.status||'Using a tool'});
+    else if(['tool_call','tool_call_update'].includes(u.sessionUpdate)){
+      if(!replay)this.state.data.activity=['completed','failed'].includes(u.status)?null:u.title||'Using a tool…';
+      this.state.updateTool(u,{replay});
+    }
   }
   close(){for(const p of [...this.state.data.permissions])this.resolvePermission(p.id,null);this.transport.close();}
 }

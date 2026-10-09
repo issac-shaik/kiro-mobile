@@ -6,7 +6,8 @@ import java.util.UUID
 
 data class Choice(val id: String, val name: String)
 data class Session(val id: String, val title: String, val cwd: String, val owned: Boolean)
-data class Message(val id: String, val role: String, val text: String, val streaming: Boolean, val creditsUsed: Double?=null, val elapsedMs: Double?=null)
+data class ToolActivity(val title: String, val status: String, val details: String)
+data class Message(val id: String, val role: String, val text: String, val streaming: Boolean, val creditsUsed: Double?=null, val elapsedMs: Double?=null, val tool: ToolActivity?=null)
 data class Permission(val id: String, val title: String, val details: String, val options: List<Choice>)
 data class Attachment(val name: String, val mimeType: String, val data: String) {
     fun json() = JSONObject().put("name", name).put("mimeType", mimeType).put("data", data)
@@ -29,7 +30,16 @@ data class Snapshot(
             return Snapshot(j.optLong("revision"),j.optString("status","offline"),j.stringOrNull("error"),
                 j.optJSONArray("sessions").objects().map { Session(it.optString("sessionId"),it.optString("title","Untitled session"),it.optString("cwd"),it.optBoolean("owned")) },
                 session?.stringOrNull("sessionId"),session?.stringOrNull("cwd"),
-                j.optJSONArray("transcript").objects().map { Message(it.optString("id"),it.optString("role"),it.optString("text"),it.optBoolean("streaming"),it.optJSONObject("summary")?.numberOrNull("creditsUsed"),it.optJSONObject("summary")?.numberOrNull("elapsedMs")) },
+                j.optJSONArray("transcript").objects().map { Message(it.optString("id"),it.optString("role"),it.optString("text"),it.optBoolean("streaming"),it.optJSONObject("summary")?.numberOrNull("creditsUsed"),it.optJSONObject("summary")?.numberOrNull("elapsedMs"),it.optJSONObject("tool")?.let { tool ->
+                    val status=when {
+                        tool.optBoolean("waitingForPermission") -> "Needs approval"
+                        tool.optString("status")=="failed" && tool.optString("failureReason")=="denied" -> "Denied"
+                        tool.optString("status")=="failed" && tool.optString("failureReason")=="cancelled" -> "Cancelled"
+                        else -> when(tool.optString("status")) { "pending" -> "Pending";"in_progress" -> "Running";"completed" -> "Completed";"failed" -> "Failed";"interrupted" -> "Interrupted";else -> "Status unavailable" }
+                    }
+                    val input=tool.stringOrNull("input");val output=tool.stringOrNull("output");val content=tool.stringOrNull("content");val locations=tool.stringOrNull("locations")
+                    ToolActivity(tool.optString("title","Tool call"),status,listOfNotNull(locations?.let { "Files\n$it" },input?.let { "Input\n$it" },content?.let { "Result\n$it" },output?.takeIf { it!=content }?.let { "Output\n$it" }).joinToString("\n\n"))
+                }) },
                 j.optJSONArray("permissions").objects().map { p -> Permission(p.optString("id"),p.optString("title"),p.optJSONObject("toolCall")?.toString(2) ?: "",p.optJSONArray("options").objects().map { Choice(it.optString("optionId"),it.optString("name")) }) },
                 j.optJSONArray("models").choices(),j.optJSONArray("reasoning").choices(),j.stringOrNull("currentModel"),j.stringOrNull("currentReasoning"),j.optString("agentPreset","default"),j.optBoolean("agentPresetNative"),
                 if(usage?.optBoolean("available")==true && !usage.isNull("remaining")) usage.optDouble("remaining") else null,

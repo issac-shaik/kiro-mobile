@@ -2,7 +2,7 @@
 
 Android client for Kiro running on your PC. Pair by QR code, resume saved conversations, and review tool approvals from your phone.
 
-**[Download APK v0.3.3](https://github.com/issac-shaik/kiro-mobile/raw/refs/heads/main/dist/kiro-mobile-debug.apk)** · [SHA-256 checksum](dist/SHA256SUMS.txt)
+**[Download APK v0.3.4](https://github.com/issac-shaik/kiro-mobile/raw/refs/heads/main/dist/kiro-mobile-debug.apk)** · [SHA-256 checksum](dist/SHA256SUMS.txt)
 
 ## Setup
 
@@ -74,7 +74,8 @@ Keep the PC awake, signed in to Kiro, and running the companion. Wi-Fi and mobil
 - Kiro login stays on the PC. Pairing keys use Android Keystore encryption. Keep `bridge/.local/` private. To revoke pairing: stop the companion, remove `pairing.json`, restart, and scan again.
 - Autopilot starts **on**. Turn it off in the composer to review tool approvals on your phone. Allowed folders restrict session selection; they are not an OS sandbox.
 - The companion restores saved sessions in its own Kiro process. Simultaneous IDE/phone control is unsupported; one conversation is controlled at a time.
-- Shows credits remaining, context usage, and credits used/time after each turn. Supports streaming Markdown, model/reasoning controls, cancellation, and four image attachments of up to 8 MB each. Audio/video transcription is unsupported.
+- Shows credits remaining, context usage, and credits used/time after each turn. Streams Markdown answers, expandable thinking, and tool calls with status and details. Supports model/reasoning controls, cancellation, and four image attachments of up to 8 MB each. Audio/video transcription is unsupported.
+- Thinking appears when Kiro emits it; restored sessions show the activity Kiro replays. Long tool results are shortened on mobile.
 - The APK uses a debug signing key. Use your own release key for production distribution.
 
 ## Build and test

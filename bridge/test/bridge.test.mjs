@@ -34,6 +34,7 @@ test('streamed history is bounded in characters and messages',()=>{
 });
 test('permission is explicit, validated and resolved exactly once',()=>{
   const state=new State(),transport=new FakeTransport();let alerts=0;const adapter=new KiroAdapter(state,{transport,onPermission:()=>alerts++});
+  state.change({selectedSession:{sessionId:'s'}});
   adapter.message({id:10,method:'session/request_permission',params:{sessionId:'s',toolCall:{title:'Edit file'},options:[{optionId:'allow',name:'Allow once'}]}});
   assert.equal(alerts,1);assert.equal(transport.replies.length,0);
   const id=state.data.permissions[0].id;assert.throws(()=>adapter.resolvePermission(id,'invalid'));

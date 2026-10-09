@@ -91,6 +91,14 @@ class MobileFlowTest {
         }
         click("Context window: 24.0% used")
         waitUntil { text("24.0% of the context window used")!=null };click("OK")
+        click("Expand Thinking")
+        waitUntil { text("I will inspect the configuration before making a change.")!=null }
+        click("Expand Read configuration")
+        waitUntil { windows().filterIsInstance<TextView>().any { it.text.contains("Configuration loaded: enabled=true")&&it.visibility==View.VISIBLE } }
+        click("Expand Read missing file")
+        onMain { assertNotNull(text("Failed"));assertNotNull(text("Completed")) }
+        capture("activity")
+        click("Collapse Thinking");click("Collapse Read configuration");click("Collapse Read missing file")
         click("Autopilot")
         waitUntil { views(activity.window.decorView).filterIsInstance<android.widget.Switch>().firstOrNull()?.isChecked==false }
         capture("chat")
@@ -119,7 +127,14 @@ class MobileFlowTest {
         waitUntil { views(activity.window.decorView).filterIsInstance<android.widget.Switch>().firstOrNull()?.isChecked==true }
         onMain { views(activity.window.decorView).filterIsInstance<EditText>().first().setText("Try Autopilot") }
         click("Send")
+        waitUntil { text("▾ Thinking…")!=null }
+        waitUntil { text("Checking the workspace… The configuration is available.")!=null }
+        capture("thinking-stream")
+        click("Collapse Thinking…")
         waitUntil { windows().filterIsInstance<TextView>().count { it.text.toString()=="0.020 credits used · 1.3s elapsed" }==2 }
+        onMain { assertFalse(text("Checking the workspace… The configuration is available.")!!.isShown) }
+        click("Expand Inspect workspace")
+        waitUntil { windows().filterIsInstance<TextView>().any { it.text.contains("Workspace inspection complete")&&it.isShown } }
         onMain { assertNull(text("Review request")) }
         capture("summary")
     }
