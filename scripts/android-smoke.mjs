@@ -29,10 +29,12 @@ adapter.prompt=async(...args)=>{
   if(args[0].text==='Try Autopilot'){
     clearTimeout(adapter.timer);
     activityTimers.push(setTimeout(()=>state.addText('thinking',' The configuration is available.'),1000));
+    activityTimers.push(setTimeout(()=>state.updateTool({toolCallId:toolCallId+'-summary',title:'Read workspace summary',status:'in_progress',rawInput:{path:'summary.json'}}),2500));
     adapter.timer=setTimeout(()=>{
       state.updateTool({toolCallId,status:'completed',rawOutput:'Workspace inspection complete'});
+      state.updateTool({toolCallId:toolCallId+'-summary',status:'completed',rawOutput:'Summary inspection complete'});
       state.addText('assistant','Demo Autopilot completed the turn. No real files were changed.');adapter.complete();
-    },4000);
+    },4500);
   }
 };
 const server=createServer({state,adapter,token:'d'.repeat(43)});

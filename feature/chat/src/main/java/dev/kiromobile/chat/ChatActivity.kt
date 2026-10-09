@@ -73,6 +73,7 @@ open class ChatActivity : Activity() {
     private lateinit var attach: ImageButton
     private lateinit var stop: ImageButton
     private lateinit var banner: TextView
+    private lateinit var workStatus: TextView
     private var state: Snapshot?=null
     private var screenPaired=false
     private var lastRender=""
@@ -80,7 +81,8 @@ open class ChatActivity : Activity() {
     private val messageViews=mutableMapOf<String,TextView>()
     private data class ActivityViews(val header: TextView,val status: TextView,val body: TextView,var message: Message)
     private val activityViews=mutableMapOf<String,ActivityViews>()
-    private val activityExpanded=mutableMapOf<String,Boolean>()
+    private var expandedActivityId: String?=null
+    private var latestActivityId: String?=null
     private var renderedSessionId: String?=null
     private val attachments=mutableListOf<Attachment>()
     private val observer: (Snapshot?,String?)->Unit={snapshot,error-> if(screenPaired)render(snapshot,error) }
@@ -213,19 +215,21 @@ open class ChatActivity : Activity() {
         root.addView(transcriptScroll,LinearLayout.LayoutParams(-1,0,1f))
         val footer=column().apply { setPadding(dp(12),0,dp(12),dp(10)) };root.addView(footer)
         permissionBox=column();footer.addView(permissionBox)
-        banner=text("",11f,muted).apply { setPadding(dp(6),dp(8),dp(6),dp(8));maxLines=2;ellipsize=TextUtils.TruncateAt.END };footer.addView(banner)
+        val statusRow=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL;setPadding(dp(6),dp(4),dp(6),dp(4)) }
+        workStatus=text("Idle",11f,muted).apply { minHeight=dp(20);gravity=Gravity.CENTER_VERTICAL;setSingleLine();accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        banner=text("",11f,muted).apply { setPadding(dp(12),0,0,0);setSingleLine();ellipsize=TextUtils.TruncateAt.END;gravity=Gravity.END }
+        statusRow.addView(workStatus);statusRow.addView(banner,LinearLayout.LayoutParams(0,-2,1f));footer.addView(statusRow)
         val composer=column().apply { background=box(panel,10,KiroTheme.border);setPadding(dp(6),dp(6),dp(6),dp(4)) }
         attachmentLabel=text("",12f,purple).apply { visibility=View.GONE;setPadding(dp(8),dp(6),dp(8),dp(6));setOnClickListener { attachments.clear();refreshAttachments() } }
         composer.addView(attachmentLabel)
         message=field("Ask Kiro to build, fix, or explore…").apply {
-            background=null;minHeight=dp(76);maxLines=5;minLines=2;gravity=Gravity.TOP;setPadding(dp(10),dp(12),dp(10),dp(12))
+            background=null;minHeight=dp(44);maxLines=5;minLines=1;gravity=Gravity.TOP;setPadding(dp(8),dp(8),dp(8),dp(8))
             inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;setText(draft)
         }
         message.setOnFocusChangeListener { _,focused -> composer.background=box(panel,10,if(focused)purple else KiroTheme.border) }
         composer.addView(message)
         agent=chip("Default ▾") { chooseAgent() }
         reasoning=chip("Reasoning ▾") { choose("reasoning",state?.reasoning ?: emptyList()) }.apply { gravity=Gravity.END or Gravity.CENTER_VERTICAL }
-        composer.addView(row(agent,reasoning))
         autopilot=Switch(this).apply {
             text="Autopilot";textSize=12f;setTextColor(ink);isChecked=true;minHeight=dp(48);setPadding(dp(8),0,dp(8),0)
             thumbTintList=ColorStateList.valueOf(ink)
@@ -235,7 +239,11 @@ open class ChatActivity : Activity() {
                 isEnabled=false;issue(command("select","kind" to "autopilot","value" to if(enabled)"on" else "off"))
             } }
         }
-        composer.addView(autopilot,LinearLayout.LayoutParams(-2,dp(48)));line(composer)
+        val options=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
+        options.addView(agent,LinearLayout.LayoutParams(0,dp(48),1f))
+        options.addView(autopilot,LinearLayout.LayoutParams(-2,dp(48)))
+        options.addView(reasoning,LinearLayout.LayoutParams(0,dp(48),1f))
+        composer.addView(options);line(composer)
         val tools=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
         model=chip("Model ▾") { choose("model",state?.models ?: emptyList()) }
         contextCircle=object : View(this) {
@@ -265,7 +273,7 @@ open class ChatActivity : Activity() {
     }
     private fun render(s: Snapshot?,error: String?) {
         state=s
-        if(renderedSessionId!=s?.selectedId){renderedSessionId=s?.selectedId;activityExpanded.clear();lastRender="";renderedIds=emptyList();transcript.removeAllViews();messageViews.clear();activityViews.clear()}
+        if(renderedSessionId!=s?.selectedId){renderedSessionId=s?.selectedId;expandedActivityId=null;latestActivityId=null;lastRender="";renderedIds=emptyList();transcript.removeAllViews();messageViews.clear();activityViews.clear()}
         status.text=when { error!=null -> "○ Reconnecting";s?.status=="online" -> if(s.demo) "● Demo connection" else "● PC connected";else -> "○ Connecting" }
         status.setTextColor(if(s?.status=="online"&&error==null)green else muted)
         credits.text=s?.credits?.let { String.format(Locale.US,"%,.2f credits remaining",it) } ?: "Credits remaining unavailable"
@@ -280,6 +288,9 @@ open class ChatActivity : Activity() {
         model.text=(s?.models?.find { it.id==s.currentModel }?.name ?: "Model")+" ▾"
         reasoning.text=(s?.reasoning?.find { it.id==s.currentReasoning }?.name ?: "Reasoning")+" ▾"
         val ready=s?.selectedId!=null && s.status=="online" && error==null
+        val working=s?.busy==true||s?.permissions?.isNotEmpty()==true
+        workStatus.text=when { error!=null -> "Reconnecting";s?.status!="online" -> "Connecting";working -> "Kiro is working";else -> "Idle" }
+        workStatus.setTextColor(if(working)purple else muted)
         agent.isEnabled=ready&&s?.busy!=true;model.isEnabled=agent.isEnabled;reasoning.isEnabled=agent.isEnabled
         autopilot.isEnabled=ready&&s?.busy!=true&&s?.permissions.isNullOrEmpty()&&s?.autopilotSupported==true&&s.autopilot!=null
         attach.isEnabled=ready&&s?.imageSupported==true&&s.busy!=true
@@ -289,7 +300,6 @@ open class ChatActivity : Activity() {
         model.contentDescription="Model: ${model.text}";reasoning.contentDescription="Reasoning: ${reasoning.text}";agent.contentDescription="Agent: ${agent.text}"
         banner.text=error ?: s?.error ?: s?.pushError ?: when {
             s?.permissions?.isNotEmpty()==true -> "Permission needed · your agent is waiting"
-            s?.busy==true -> s.activity ?: "Kiro is working on your PC…"
             s?.demo==true -> "Demo data · no account connected"
             s==null||s.status!="online" -> "Connecting to your PC…"
             s?.selectedId!=null && !s.presetNative && s.preset!="default" -> "${presetLabels[s.preset]} uses prompt guidance on this engine"
@@ -305,7 +315,9 @@ open class ChatActivity : Activity() {
             val ids=messages.map { it.id }
             val appendOnly=renderedIds.isNotEmpty()&&ids.take(renderedIds.size)==renderedIds
             if(!appendOnly){transcript.removeAllViews();messageViews.clear();activityViews.clear();renderedIds=emptyList()}
-            activityExpanded.keys.retainAll(ids.toSet())
+            val latest=messages.lastOrNull { it.role=="thinking"||it.role=="tool" }?.id
+            if(latest!=latestActivityId){latestActivityId=latest;expandedActivityId=latest}
+            if(expandedActivityId!=null&&expandedActivityId !in ids)expandedActivityId=latest
             if(s?.messages.isNullOrEmpty()) {
                 val welcome=column().apply { gravity=Gravity.CENTER;setPadding(dp(16),dp(40),dp(16),dp(30)) }
                 welcome.addView(mark(48));gap(welcome,20)
@@ -355,12 +367,15 @@ open class ChatActivity : Activity() {
         val status=text("",11f,muted).apply { setPadding(dp(16),0,0,dp(4)) }
         val body=text("",13f,muted).apply { setTextIsSelectable(true);setPadding(dp(4),dp(8),dp(4),dp(8));if(m.role=="tool")typeface=Typeface.MONOSPACE }
         val views=ActivityViews(header,status,body,m);activityViews[m.id]=views
-        header.setOnClickListener { activityExpanded[m.id]=!isActivityExpanded(views.message);updateActivity(views) }
+        header.setOnClickListener {
+            expandedActivityId=if(isActivityExpanded(views.message))null else m.id
+            activityViews.values.forEach { updateActivity(it) }
+        }
         card.addView(header);card.addView(status);card.addView(body)
         transcript.addView(card,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(10) })
         updateActivity(views)
     }
-    private fun isActivityExpanded(m: Message)=activityExpanded[m.id] ?: (m.role=="thinking"&&m.streaming)
+    private fun isActivityExpanded(m: Message)=expandedActivityId==m.id
     private fun updateActivity(views: ActivityViews) {
         val m=views.message;val thinking=m.role=="thinking";val expanded=isActivityExpanded(m)
         val title=if(thinking)if(m.streaming)"Thinking…" else "Thinking" else m.tool?.title ?: "Tool call"

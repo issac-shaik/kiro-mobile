@@ -1,5 +1,11 @@
 # Validation record
 
+## Version 0.3.5
+
+- Compacted the composer to a shorter message field and one row for agent, Autopilot, and reasoning controls, retaining 48 dp control touch areas.
+- Android build and lint passed. Both emulator flows passed, including working/idle labels, automatic expansion of new thinking/tool entries, collapse of previous entries, manual expansion, and keeping the latest entry open when older tools finish.
+- Visually reviewed the compact composer in idle and streaming states. This update changes the Android UI only; it requires no companion restart.
+
 ## Version 0.3.4
 
 - 27 companion tests passed, covering thinking chunk order, tool updates by ID, partial field updates, failed/interrupted calls, permissions, session isolation, replay, and bounded tool output.

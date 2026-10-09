@@ -88,6 +88,7 @@ class MobileFlowTest {
         onMain {
             assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.Switch>().first().isChecked)
             assertNotNull(text("123.50 credits remaining"))
+            assertNotNull(text("Idle"))
         }
         click("Context window: 24.0% used")
         waitUntil { text("24.0% of the context window used")!=null };click("OK")
@@ -95,10 +96,11 @@ class MobileFlowTest {
         waitUntil { text("I will inspect the configuration before making a change.")!=null }
         click("Expand Read configuration")
         waitUntil { windows().filterIsInstance<TextView>().any { it.text.contains("Configuration loaded: enabled=true")&&it.visibility==View.VISIBLE } }
+        onMain { assertFalse(text("I will inspect the configuration before making a change.")!!.isShown) }
         click("Expand Read missing file")
         onMain { assertNotNull(text("Failed"));assertNotNull(text("Completed")) }
         capture("activity")
-        click("Collapse Thinking");click("Collapse Read configuration");click("Collapse Read missing file")
+        click("Collapse Read missing file")
         click("Autopilot")
         waitUntil { views(activity.window.decorView).filterIsInstance<android.widget.Switch>().firstOrNull()?.isChecked==false }
         capture("chat")
@@ -113,6 +115,7 @@ class MobileFlowTest {
         waitUntil { manager.activeNotifications.any { it.id==1 } }
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         waitUntil { text("Review request")!=null }
+        onMain { assertNotNull(text("Kiro is working")) }
         onMain {
             val body=windows().filterIsInstance<TextView>().firstOrNull { it.text.contains("Continue from my phone with") && it.text.contains("2 * 3") }
             assertNotNull("Sent messages must render emphasis and preserve code",body)
@@ -123,16 +126,24 @@ class MobileFlowTest {
         waitUntil { manager.activeNotifications.none { it.tag?.startsWith("permission:")==true } }
         waitUntil { text("0.020 credits used · 1.3s elapsed")!=null }
         waitUntil { text("Review request")==null }
+        waitUntil { text("Idle")!=null }
         click("Autopilot")
         waitUntil { views(activity.window.decorView).filterIsInstance<android.widget.Switch>().firstOrNull()?.isChecked==true }
         onMain { views(activity.window.decorView).filterIsInstance<EditText>().first().setText("Try Autopilot") }
         click("Send")
         waitUntil { text("▾ Thinking…")!=null }
+        onMain { assertNotNull(text("Kiro is working")) }
         waitUntil { text("Checking the workspace… The configuration is available.")!=null }
         capture("thinking-stream")
         click("Collapse Thinking…")
+        waitUntil { windows().any { it.contentDescription=="Collapse Read workspace summary" } }
+        onMain {
+            assertFalse(text("Checking the workspace… The configuration is available.")!!.isShown)
+            assertEquals(1,windows().count { it.contentDescription?.toString()?.startsWith("Collapse ")==true })
+        }
         waitUntil { windows().filterIsInstance<TextView>().count { it.text.toString()=="0.020 credits used · 1.3s elapsed" }==2 }
         onMain { assertFalse(text("Checking the workspace… The configuration is available.")!!.isShown) }
+        onMain { assertNotNull(text("Idle"));assertTrue(windows().any { it.contentDescription=="Collapse Read workspace summary" }) }
         click("Expand Inspect workspace")
         waitUntil { windows().filterIsInstance<TextView>().any { it.text.contains("Workspace inspection complete")&&it.isShown } }
         onMain { assertNull(text("Review request")) }
